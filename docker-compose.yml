@@ -1,0 +1,73 @@
+# Copyright (C) 2025 Forkbomb B.V.
+# License: AGPL-3.0-only
+
+services:
+  avdctl:
+    build:
+      context: .
+      dockerfile: Dockerfile.full
+    image: avdctl:latest
+    container_name: avdctl
+    privileged: false
+    devices:
+      - /dev/kvm:/dev/kvm
+    volumes:
+      # AVD storage (base + clones)
+      - avd-home:/root/.android/avd
+      # Golden images (compressed QCOW2)
+      - avd-golden:/avd-golden
+      # Optional: Custom config template
+      - ./config.ini.tpl:/config.ini.tpl:ro
+      # Optional: APKs for baking
+      - ./apks:/apks:ro
+    ports:
+      # Emulator console/adb pairs
+      - "5554:5554"   # emulator-5554
+      - "5555:5555"
+      - "5556:5556"   # emulator-5556
+      - "5557:5557"
+      - "5558:5558"   # emulator-5558
+      - "5559:5559"
+      - "5560:5560"   # emulator-5560
+      - "5561:5561"
+      - "5562:5562"   # emulator-5562
+      - "5563:5563"
+      - "5564:5564"   # emulator-5564
+      - "5565:5565"
+      - "5566:5566"   # emulator-5566
+      - "5567:5567"
+      - "5568:5568"   # emulator-5568
+      - "5569:5569"
+      - "5570:5570"   # emulator-5570
+      - "5571:5571"
+      - "5572:5572"   # emulator-5572
+      - "5573:5573"
+      - "5574:5574"   # emulator-5574
+      - "5575:5575"
+      - "5576:5576"   # emulator-5576
+      - "5577:5577"
+      - "5578:5578"   # emulator-5578
+      - "5579:5579"
+      - "5580:5580"   # avdctl default start port
+      - "5581:5581"
+      - "5582:5582"
+      - "5583:5583"
+      - "5584:5584"
+      - "5585:5585"
+      - "5586:5586"
+    environment:
+      - ANDROID_SDK_ROOT=/opt/android-sdk
+      - ANDROID_AVD_HOME=/root/.android/avd
+      - AVDCTL_GOLDEN_DIR=/avd-golden
+      - AVDCTL_CONFIG_TEMPLATE=/config.ini.tpl
+      - QEMU_AUDIO_DRV=none
+    stdin_open: true
+    tty: true
+    command: ["sleep", "infinity"]
+
+volumes:
+  # Persistent volumes for AVDs and golden images
+  avd-home:
+    driver: local
+  avd-golden:
+    driver: local

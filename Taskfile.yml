@@ -1,0 +1,100 @@
+# https://taskfile.dev
+
+version: '3'
+
+env:
+  ANDROID_SDK_ROOT:    /opt/android-sdk
+  ANDROID_AVD_HOME:    "{{.HOME}}/.android/avd"
+  AVDCTL_GOLDEN_DIR:   "{{.HOME}}/avd-golden"
+  AVDCTL_CLONES_DIR:   "{{.HOME}}/avd-clones"
+  AVDCTL_CONFIG_TEMPLATE: "./config.ini.tpl"
+
+
+vars:
+  BASE_NAME: base-a35
+  SYS_IMAGE: "system-images;android-35;google_apis_playstore;x86_64"
+  DEVICE: "pixel_6"
+  GOLDEN: "{{.AVDCTL_GOLDEN_DIR}}/{{.BASE_NAME}}-prewarmed.qcow2"
+  PORT1: "5580"
+  PORT2: "5582"
+
+
+tasks:
+  build:
+    cmds:
+      - go build -o bin/avdctl ./cmd/avdctl
+
+  test:
+    cmds:
+      - go test ./...
+
+  env:   # quick show
+    cmds:
+      - echo ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT
+      - echo ANDROID_AVD_HOME=$ANDROID_AVD_HOME
+      - echo AVDCTL_GOLDEN_DIR=$AVDCTL_GOLDEN_DIR
+      - echo AVDCTL_CLONES_DIR=$AVDCTL_CLONES_DIR
+      - echo AVDCTL_CONFIG_TEMPLATE=$AVDCTL_CONFIG_TEMPLATE
+
+  a:
+    cmds:
+      - ./bin/avdctl {{.CLI_ARGS}}
+
+  mkdirs:
+    cmds:
+      - mkdir -p "$AVDCTL_GOLDEN_DIR" "$AVDCTL_CLONES_DIR" "$ANDROID_AVD_HOME"
+
+  init-base:
+    deps: [build, mkdirs]
+    cmds:
+      - ./bin/avdctl init-base --name "{{.BASE_NAME}}" --image "{{.SYS_IMAGE}}" --device "{{.DEVICE}}"
+
+  prewarm:
+    deps: [build, mkdirs]
+    cmds:
+      - ./bin/avdctl prewarm --name "{{.BASE_NAME}}" --dest "{{.GOLDEN}}"
+
+  clone-acme:
+    deps: [build]
+    cmds:
+      - ./bin/avdctl clone --base "{{.BASE_NAME}}" --name "w-acme" --golden "{{.GOLDEN}}"
+
+  clone-gino:
+    deps: [build]
+    cmds:
+      - ./bin/avdctl clone --base "{{.BASE_NAME}}" --name "w-gino" --golden "{{.GOLDEN}}"
+
+  run-acme:
+    deps: [build]
+    cmds:
+      - ./bin/avdctl run --name "w-acme" --port {{.PORT1}}
+
+  run-gino:
+    deps: [build]
+    cmds:
+      - ./bin/avdctl run --name "w-gino" --port {{.PORT2}}
+
+  ps:
+    cmds:
+      - ./bin/avdctl ps
+
+  stop:
+    cmds:
+      - ./bin/avdctl stop --name "{{.NAME}}"
+    vars:
+      NAME: w-acme
+
+  clean-avds:
+    cmds:
+      - adb kill-server || true
+      - rm -rf "$ANDROID_AVD_HOME"/*.avd
+      - rm -f "$ANDROID_AVD_HOME"/*.ini
+
+  # full from-scratch flow
+  fresh:
+    cmds:
+      - task clean-avds
+      - task init-base
+      - task prewarm
+      - task clone-acme
+      - task clone-gino

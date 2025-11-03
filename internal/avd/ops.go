@@ -344,7 +344,11 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 	time.Sleep(1 * time.Second)
 	ensureADB(env)
 
-	const port = 5580 // pick an even, rarely-used port; adjust if you run many in parallel
+	// Find a free port dynamically to avoid conflicts
+	port, err := FindFreeEvenPort(5580, 5800)
+	if err != nil {
+		return "", 0, fmt.Errorf("no free port available for prewarming: %w", err)
+	}
 	cmd, serial, logPath, err := StartEmulatorOnPort(env, name, port)
 	if err != nil {
 		return "", 0, err
@@ -456,8 +460,17 @@ func ensureADB(env Env) { _ = exec.Command(env.ADB, "start-server").Run() }
 func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*exec.Cmd, string, string, error) {
 	// emulator uses a pair: <port> and <port+1>; must be even
 	if port%2 != 0 {
-		port--
+		return nil, "", "", fmt.Errorf("port %d is odd; emulator requires even port numbers (uses port and port+1)", port)
 	}
+	if port < 5554 || port > 5800 {
+		return nil, "", "", fmt.Errorf("port %d out of valid range (5554-5800)", port)
+	}
+	
+	// Check if port is already in use
+	if !isPortFree(port) || !isPortFree(port+1) {
+		return nil, "", "", fmt.Errorf("port %d or %d already in use", port, port+1)
+	}
+	
 	logPath := filepath.Join(os.TempDir(), fmt.Sprintf("emulator-%s-%d.log", name, port))
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -550,25 +563,38 @@ type ProcInfo struct {
 
 func ListRunning(env Env) ([]ProcInfo, error) {
 	ensureADB(env)
-	// 1) read adb devices
+	
+	var procs []ProcInfo
+	seen := make(map[int]bool)
+	
+	// Strategy 1: Get emulators from adb devices (may not show all if just started)
 	var out bytes.Buffer
 	c := exec.Command(env.ADB, "devices")
 	c.Stdout = &out
 	_ = c.Run()
-
-	var procs []ProcInfo
+	
 	for _, line := range strings.Split(out.String(), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 && strings.HasPrefix(f[0], "emulator-") {
 			serial := f[0]
-			// parse port:
 			port := 0
 			if n, err := strconv.Atoi(strings.TrimPrefix(serial, "emulator-")); err == nil {
 				port = n
 			}
+			if port == 0 {
+				continue
+			}
+			seen[port] = true
+			
+			// Try to get name from adb, fallback to process cmdline
 			name, _ := GetAVDNameFromSerial(env, serial)
+			pid := findEmulatorPID(port)
+			if name == "" && pid > 0 {
+				name = findEmulatorNameFromPID(pid)
+			}
+			
 			boot := false
-			// quick boot check
+			// quick boot check using explicit serial
 			var b bytes.Buffer
 			cmd := exec.Command(env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
 			cmd.Stdout = &b
@@ -576,11 +602,41 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 			if strings.TrimSpace(b.String()) == "1" {
 				boot = true
 			}
-			// pid (best effort)
-			pid := findEmulatorPID(port)
 			procs = append(procs, ProcInfo{Serial: serial, Name: name, Port: port, PID: pid, Booted: boot})
 		}
 	}
+	
+	// Strategy 2: Scan for running qemu processes that adb missed
+	// This catches emulators that just started and haven't registered with adb yet
+	// Scan the full range that emulators typically use
+	for port := 5554; port <= 5800; port += 2 {
+		if seen[port] {
+			continue
+		}
+		pid := findEmulatorPID(port)
+		if pid > 0 {
+			// Found a running emulator on this port
+			serial := fmt.Sprintf("emulator-%d", port)
+			// Try to get name from adb, fallback to process cmdline
+			name, _ := GetAVDNameFromSerial(env, serial)
+			if name == "" {
+				name = findEmulatorNameFromPID(pid)
+			}
+			
+			// Try to check boot status
+			boot := false
+			var b bytes.Buffer
+			cmd := exec.Command(env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
+			cmd.Stdout = &b
+			cmd.Stderr = &bytes.Buffer{} // discard errors
+			if cmd.Run() == nil && strings.TrimSpace(b.String()) == "1" {
+				boot = true
+			}
+			
+			procs = append(procs, ProcInfo{Serial: serial, Name: name, Port: port, PID: pid, Booted: boot})
+		}
+	}
+	
 	return procs, nil
 }
 
@@ -596,18 +652,62 @@ func findEmulatorPID(port int) int {
 		if err != nil {
 			continue
 		}
-		if bytes.Contains(b, []byte(fmt.Sprintf("-port%c%d", 0, port))) {
+		// Must contain both "-port <port>" AND "qemu-system" or "emulator" (not docker-proxy!)
+		if bytes.Contains(b, []byte(fmt.Sprintf("-port%c%d", 0, port))) &&
+			(bytes.Contains(b, []byte("qemu-system")) || bytes.Contains(b, []byte("emulator"))) {
 			// extract PID from path /proc/<pid>/cmdline
 			base := filepath.Base(filepath.Dir(p))
 			if n, err := strconv.Atoi(base); err == nil {
-				return n
+				// Verify this PID actually exists and is running
+				if _, statErr := os.Stat(filepath.Join("/proc", base, "stat")); statErr == nil {
+					return n
+				}
 			}
 		}
 	}
 	return 0
 }
 
+// findEmulatorNameFromPID extracts AVD name from process cmdline
+func findEmulatorNameFromPID(pid int) string {
+	if pid == 0 {
+		return ""
+	}
+	cmdlinePath := filepath.Join("/proc", strconv.Itoa(pid), "cmdline")
+	b, err := os.ReadFile(cmdlinePath)
+	if err != nil {
+		return ""
+	}
+	// cmdline is null-separated: [emulator, -avd, name, -port, ...]
+	parts := bytes.Split(b, []byte{0})
+	for i, part := range parts {
+		if string(part) == "-avd" && i+1 < len(parts) {
+			return string(parts[i+1])
+		}
+	}
+	return ""
+}
+
+// isPortFree checks if a TCP port is available
+func isPortFree(port int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = l.Close()
+	return true
+}
+
 // Stop by serial (clean).
 func StopBySerial(env Env, serial string) error {
-	return exec.Command(env.ADB, "-s", serial, "emu", "kill").Run()
+	if !strings.HasPrefix(serial, "emulator-") {
+		return fmt.Errorf("invalid serial format: %s (expected emulator-XXXX)", serial)
+	}
+	cmd := exec.Command(env.ADB, "-s", serial, "emu", "kill")
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to stop %s: %w\nADB error: %s", serial, err, errBuf.String())
+	}
+	return nil
 }

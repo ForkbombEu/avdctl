@@ -427,6 +427,7 @@ See **[pkg/avdmanager/README.md](pkg/avdmanager/README.md)** for complete API do
 ## See Also
 
 - **[pkg/avdmanager](pkg/avdmanager)** - Go library API documentation
+- **[PORT-MANAGEMENT.md](PORT-MANAGEMENT.md)** - Parallel execution and port management guide
 - **[QUICKSTART-DOCKER.md](QUICKSTART-DOCKER.md)** - Docker quick start guide
 - **[DOCKER.md](DOCKER.md)** - Docker setup with full Android SDK and emulator
 - **CRUSH.md** - Detailed development guide for contributors

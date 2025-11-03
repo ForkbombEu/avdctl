@@ -409,8 +409,25 @@ docker-compose exec avdctl bash
 avdctl init-base --name base-a35
 ```
 
+## Using as a Go Library
+
+You can import `avdctl` as a library in your Go projects:
+
+```go
+import "github.com/forkbombeu/avdctl/pkg/avdmanager"
+
+mgr := avdmanager.New()
+mgr.InitBase(avdmanager.InitBaseOptions{...})
+mgr.Clone(avdmanager.CloneOptions{...})
+mgr.Run(avdmanager.RunOptions{...})
+```
+
+See **[pkg/avdmanager/README.md](pkg/avdmanager/README.md)** for complete API documentation and examples.
+
 ## See Also
 
+- **[pkg/avdmanager](pkg/avdmanager)** - Go library API documentation
+- **[QUICKSTART-DOCKER.md](QUICKSTART-DOCKER.md)** - Docker quick start guide
 - **[DOCKER.md](DOCKER.md)** - Docker setup with full Android SDK and emulator
 - **CRUSH.md** - Detailed development guide for contributors
 - **Taskfile.yml** - Task automation examples

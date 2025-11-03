@@ -466,9 +466,12 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		return nil, "", "", fmt.Errorf("port %d out of valid range (5554-5800)", port)
 	}
 	
-	// Check if port is already in use
+	// Check if port is already in use (with brief retry for TIME_WAIT sockets)
 	if !isPortFree(port) || !isPortFree(port+1) {
-		return nil, "", "", fmt.Errorf("port %d or %d already in use", port, port+1)
+		time.Sleep(1 * time.Second)
+		if !isPortFree(port) || !isPortFree(port+1) {
+			return nil, "", "", fmt.Errorf("port %d or %d already in use", port, port+1)
+		}
 	}
 	
 	logPath := filepath.Join(os.TempDir(), fmt.Sprintf("emulator-%s-%d.log", name, port))
@@ -698,16 +701,53 @@ func isPortFree(port int) bool {
 	return true
 }
 
-// Stop by serial (clean).
+// Stop by serial (clean). Falls back to SIGTERM if adb fails.
 func StopBySerial(env Env, serial string) error {
 	if !strings.HasPrefix(serial, "emulator-") {
 		return fmt.Errorf("invalid serial format: %s (expected emulator-XXXX)", serial)
 	}
+	
+	// Extract port from serial
+	port := 0
+	if n, err := strconv.Atoi(strings.TrimPrefix(serial, "emulator-")); err == nil {
+		port = n
+	}
+	
+	// Try graceful shutdown via adb first
 	cmd := exec.Command(env.ADB, "-s", serial, "emu", "kill")
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("failed to stop %s: %w\nADB error: %s", serial, err, errBuf.String())
+	adbErr := cmd.Run()
+	
+	// Wait a moment to see if it worked
+	time.Sleep(1 * time.Second)
+	
+	// Check if process is still running
+	pid := findEmulatorPID(port)
+	if pid == 0 {
+		// Successfully stopped
+		return nil
 	}
+	
+	// ADB kill failed or didn't work, fallback to SIGTERM
+	if proc, err := os.FindProcess(pid); err == nil {
+		if killErr := proc.Signal(os.Interrupt); killErr == nil {
+			// Wait a bit for graceful shutdown
+			time.Sleep(2 * time.Second)
+			// Check if still running
+			if findEmulatorPID(port) > 0 {
+				// Force kill
+				_ = proc.Kill()
+			}
+			return nil
+		}
+	}
+	
+	// If we got here, adb failed and we couldn't kill the process
+	if adbErr != nil {
+		return fmt.Errorf("failed to stop %s via adb: %w\nADB error: %s\nAlso failed to kill PID %d", 
+			serial, adbErr, errBuf.String(), pid)
+	}
+	
 	return nil
 }

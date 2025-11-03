@@ -272,7 +272,9 @@ Clones symlink most files from the base AVD (system images, ROMs). Skips: `snaps
 
 `PrewarmGolden` hardcodes port 5580. If you run multiple prewarming operations concurrently, you'll get port conflicts.
 
-**Related code**: `internal/avd/ops.go:299`
+**Related code**: `internal/avd/ops.go:320`
+
+**Note**: Prewarm now restarts ADB server before starting to clear stale state. If boot detection times out but userdata file exists (>1MB), it will proceed with SaveGolden anyway, as the boot likely succeeded despite ADB connection issues.
 
 ### 9. Emulator Logs Are Saved to /tmp
 

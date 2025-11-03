@@ -181,6 +181,8 @@ path, size, err := mgr.Prewarm(avdmanager.PrewarmOptions{
 
 Use this for automated golden creation without manual configuration.
 
+**Note**: If Prewarm times out but the emulator log shows "Boot completed", the emulator likely booted successfully but ADB lost connection. In this case, the userdata file was created and you can still save the golden image manually with `SaveGolden()`. The library will automatically detect this and save the golden even if ADB timed out.
+
 #### BakeAPK
 
 Create a clone, boot it, install APKs, then export as a new golden:

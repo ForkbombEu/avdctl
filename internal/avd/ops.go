@@ -295,18 +295,42 @@ func GuessEmulatorSerial(env Env) (string, error) {
 func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	_ = run(env.ADB, "wait-for-device")
+	
+	lastError := ""
 	for time.Now().Before(deadline) {
 		var out bytes.Buffer
+		var errOut bytes.Buffer
 		cmd := exec.Command(env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
 		cmd.Stdout = &out
-		_ = cmd.Run()
-		if strings.TrimSpace(out.String()) == "1" {
+		cmd.Stderr = &errOut
+		err := cmd.Run()
+		
+		bootCompleted := strings.TrimSpace(out.String())
+		if bootCompleted == "1" {
 			time.Sleep(2 * time.Second)
 			return nil
 		}
+		
+		// Track last error for better diagnostics
+		if err != nil {
+			lastError = errOut.String()
+			if lastError == "" {
+				lastError = err.Error()
+			}
+		}
+		
 		time.Sleep(500 * time.Millisecond)
 	}
-	return fmt.Errorf("boot timeout after %s", timeout)
+	
+	// Provide helpful error message
+	errMsg := fmt.Sprintf("boot timeout after %s (adb could not confirm boot completion)", timeout)
+	if lastError != "" {
+		errMsg += fmt.Sprintf("\nLast ADB error: %s", strings.TrimSpace(lastError))
+	}
+	errMsg += fmt.Sprintf("\nHint: Check if emulator is still running and adb can see it: adb devices")
+	errMsg += fmt.Sprintf("\nNote: The emulator may have booted successfully but ADB lost connection.")
+	
+	return fmt.Errorf("%s", errMsg)
 }
 
 func KillEmulator(env Env, serial string) {
@@ -315,6 +339,9 @@ func KillEmulator(env Env, serial string) {
 }
 
 func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout time.Duration) (string, int64, error) {
+	// Restart ADB server to clear stale state
+	_ = exec.Command(env.ADB, "kill-server").Run()
+	time.Sleep(1 * time.Second)
 	ensureADB(env)
 
 	const port = 5580 // pick an even, rarely-used port; adjust if you run many in parallel
@@ -326,12 +353,20 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 
 	// Wait until adb sees that specific emulator serial
 	if err := waitForEmulatorSerial(env, serial, 30*time.Second); err != nil {
-		return "", 0, fmt.Errorf("%w\nemulator log: %s", err, logPath)
+		return "", 0, fmt.Errorf("ADB failed to detect emulator serial %s: %w\nEmulator log: %s\nNote: The emulator may still be starting. Check the log file for details.", serial, err, logPath)
 	}
 
 	// Now wait for Android to finish booting
 	if err := WaitForBoot(env, serial, bootTimeout); err != nil {
-		return "", 0, fmt.Errorf("%w\nemulator log: %s", err, logPath)
+		// Check if userdata was created (indicates boot likely succeeded)
+		avdPath := filepath.Join(env.AVDHome, name+".avd")
+		userdata := filepath.Join(avdPath, "userdata-qemu.img")
+		if st, statErr := os.Stat(userdata); statErr == nil && st.Size() > 1024*1024 {
+			// Userdata exists and is large enough - boot likely succeeded
+			KillEmulator(env, serial)
+			return SaveGolden(env, name, dest)
+		}
+		return "", 0, fmt.Errorf("%w\nEmulator log: %s", err, logPath)
 	}
 
 	if extra > 0 {

@@ -466,11 +466,16 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		return nil, "", "", fmt.Errorf("port %d out of valid range (5554-5800)", port)
 	}
 	
-	// Check if port is already in use (with brief retry for TIME_WAIT sockets)
-	if !isPortFree(port) || !isPortFree(port+1) {
-		time.Sleep(1 * time.Second)
-		if !isPortFree(port) || !isPortFree(port+1) {
-			return nil, "", "", fmt.Errorf("port %d or %d already in use", port, port+1)
+	// Check if port is already in use (with retry for TIME_WAIT sockets)
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if isPortFree(port) && isPortFree(port+1) {
+			break
+		}
+		if attempt < maxRetries-1 {
+			time.Sleep(2 * time.Second)
+		} else {
+			return nil, "", "", fmt.Errorf("port %d or %d still in use after %d retries (may be in TIME_WAIT state)", port, port+1, maxRetries)
 		}
 	}
 	

@@ -295,7 +295,7 @@ func GuessEmulatorSerial(env Env) (string, error) {
 func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	_ = run(env.ADB, "wait-for-device")
-	
+
 	lastError := ""
 	for time.Now().Before(deadline) {
 		var out bytes.Buffer
@@ -304,13 +304,13 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 		cmd.Stdout = &out
 		cmd.Stderr = &errOut
 		err := cmd.Run()
-		
+
 		bootCompleted := strings.TrimSpace(out.String())
 		if bootCompleted == "1" {
 			time.Sleep(2 * time.Second)
 			return nil
 		}
-		
+
 		// Track last error for better diagnostics
 		if err != nil {
 			lastError = errOut.String()
@@ -318,10 +318,10 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 				lastError = err.Error()
 			}
 		}
-		
+
 		time.Sleep(500 * time.Millisecond)
 	}
-	
+
 	// Provide helpful error message
 	errMsg := fmt.Sprintf("boot timeout after %s (adb could not confirm boot completion)", timeout)
 	if lastError != "" {
@@ -329,7 +329,7 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 	}
 	errMsg += fmt.Sprintf("\nHint: Check if emulator is still running and adb can see it: adb devices")
 	errMsg += fmt.Sprintf("\nNote: The emulator may have booted successfully but ADB lost connection.")
-	
+
 	return fmt.Errorf("%s", errMsg)
 }
 
@@ -465,7 +465,7 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 	if port < 5554 || port > 5800 {
 		return nil, "", "", fmt.Errorf("port %d out of valid range (5554-5800)", port)
 	}
-	
+
 	// Check if port is already in use (with retry for TIME_WAIT sockets)
 	maxRetries := 3
 	for attempt := 0; attempt < maxRetries; attempt++ {
@@ -478,7 +478,7 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 			return nil, "", "", fmt.Errorf("port %d or %d still in use after %d retries (may be in TIME_WAIT state)", port, port+1, maxRetries)
 		}
 	}
-	
+
 	logPath := filepath.Join(os.TempDir(), fmt.Sprintf("emulator-%s-%d.log", name, port))
 	logFile, err := os.Create(logPath)
 	if err != nil {
@@ -555,10 +555,15 @@ func GetAVDNameFromSerial(env Env, serial string) (string, error) {
 	var buf bytes.Buffer
 	cmd := exec.Command(env.ADB, "-s", serial, "emu", "avd", "name")
 	cmd.Stdout = &buf
-	if err := cmd.Run(); err != nil {
-		return "", err
+	// Clean up adb’s “OK” suffix and whitespace
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) == 0 {
+		return "", nil
 	}
-	return strings.TrimSpace(buf.String()), nil
+
+	// The first line is the AVD name
+	name := strings.TrimSpace(lines[0])
+	return name, nil
 }
 
 type ProcInfo struct {
@@ -571,16 +576,16 @@ type ProcInfo struct {
 
 func ListRunning(env Env) ([]ProcInfo, error) {
 	ensureADB(env)
-	
+
 	var procs []ProcInfo
 	seen := make(map[int]bool)
-	
+
 	// Strategy 1: Get emulators from adb devices (may not show all if just started)
 	var out bytes.Buffer
 	c := exec.Command(env.ADB, "devices")
 	c.Stdout = &out
 	_ = c.Run()
-	
+
 	for _, line := range strings.Split(out.String(), "\n") {
 		f := strings.Fields(line)
 		if len(f) >= 2 && strings.HasPrefix(f[0], "emulator-") {
@@ -593,14 +598,14 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 				continue
 			}
 			seen[port] = true
-			
+
 			// Try to get name from adb, fallback to process cmdline
 			name, _ := GetAVDNameFromSerial(env, serial)
 			pid := findEmulatorPID(port)
 			if name == "" && pid > 0 {
 				name = findEmulatorNameFromPID(pid)
 			}
-			
+
 			boot := false
 			// quick boot check using explicit serial
 			var b bytes.Buffer
@@ -613,7 +618,7 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 			procs = append(procs, ProcInfo{Serial: serial, Name: name, Port: port, PID: pid, Booted: boot})
 		}
 	}
-	
+
 	// Strategy 2: Scan for running qemu processes that adb missed
 	// This catches emulators that just started and haven't registered with adb yet
 	// Scan the full range that emulators typically use
@@ -630,7 +635,7 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 			if name == "" {
 				name = findEmulatorNameFromPID(pid)
 			}
-			
+
 			// Try to check boot status
 			boot := false
 			var b bytes.Buffer
@@ -640,11 +645,11 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 			if cmd.Run() == nil && strings.TrimSpace(b.String()) == "1" {
 				boot = true
 			}
-			
+
 			procs = append(procs, ProcInfo{Serial: serial, Name: name, Port: port, PID: pid, Booted: boot})
 		}
 	}
-	
+
 	return procs, nil
 }
 
@@ -711,29 +716,29 @@ func StopBySerial(env Env, serial string) error {
 	if !strings.HasPrefix(serial, "emulator-") {
 		return fmt.Errorf("invalid serial format: %s (expected emulator-XXXX)", serial)
 	}
-	
+
 	// Extract port from serial
 	port := 0
 	if n, err := strconv.Atoi(strings.TrimPrefix(serial, "emulator-")); err == nil {
 		port = n
 	}
-	
+
 	// Try graceful shutdown via adb first
 	cmd := exec.Command(env.ADB, "-s", serial, "emu", "kill")
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	adbErr := cmd.Run()
-	
+
 	// Wait a moment to see if it worked
 	time.Sleep(1 * time.Second)
-	
+
 	// Check if process is still running
 	pid := findEmulatorPID(port)
 	if pid == 0 {
 		// Successfully stopped
 		return nil
 	}
-	
+
 	// ADB kill failed or didn't work, fallback to SIGTERM
 	if proc, err := os.FindProcess(pid); err == nil {
 		if killErr := proc.Signal(os.Interrupt); killErr == nil {
@@ -747,12 +752,12 @@ func StopBySerial(env Env, serial string) error {
 			return nil
 		}
 	}
-	
+
 	// If we got here, adb failed and we couldn't kill the process
 	if adbErr != nil {
-		return fmt.Errorf("failed to stop %s via adb: %w\nADB error: %s\nAlso failed to kill PID %d", 
+		return fmt.Errorf("failed to stop %s via adb: %w\nADB error: %s\nAlso failed to kill PID %d",
 			serial, adbErr, errBuf.String(), pid)
 	}
-	
+
 	return nil
 }

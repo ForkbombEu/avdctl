@@ -322,7 +322,7 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 	}
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
-	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off")
+	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null")
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("emulator start: %w", err)
 	}
@@ -559,7 +559,7 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 	cmd := exec.Command(env.Emulator, args...)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off")
+	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null")
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()

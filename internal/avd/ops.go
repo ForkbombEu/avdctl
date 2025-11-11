@@ -280,7 +280,10 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// 6. Report size & info
 	// ---------------------------------------------------------------------
 	userdata := filepath.Join(cloneDir, "userdata-qemu.img")
-	fi, _ := os.Stat(userdata)
+	fi, err := os.Stat(userdata)
+	if err != nil {
+		return Info{}, fmt.Errorf("stat userdata: %w", err)
+	}
 	info := Info{
 		Name:      name,
 		Path:      cloneDir,

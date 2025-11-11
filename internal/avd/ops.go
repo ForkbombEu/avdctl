@@ -114,7 +114,7 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 	}
 	
 	// List of writable images to save (base name)
-	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img"}
+	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img", "sdcard.img"}
 	var totalSize int64
 	
 	for _, img := range images {
@@ -241,10 +241,16 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// ---------------------------------------------------------------------
 	// 3. Copy raw IMG files from golden directory
 	// ---------------------------------------------------------------------
-	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img"}
+	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img", "sdcard.img"}
 	for _, img := range images {
 		goldenFile := filepath.Join(absGoldenDir, img)
 		if _, err := os.Stat(goldenFile); err != nil {
+			// If sdcard.img is missing, create it from config.ini sdcard.size
+			if img == "sdcard.img" {
+				if err := createSDCard(env, cloneDir, dstCfg); err != nil {
+					return Info{}, fmt.Errorf("create sdcard: %w", err)
+				}
+			}
 			continue // Skip if golden image doesn't exist
 		}
 		
@@ -301,7 +307,8 @@ func sanitizeConfigINI(b []byte) []byte {
 			strings.HasPrefix(l, "snapshot.present=") ||
 			strings.HasPrefix(l, "fastboot.") ||
 			strings.HasPrefix(l, "disk.dataPartition.") ||
-			strings.HasPrefix(l, "userdata.useQcow2=") {
+			strings.HasPrefix(l, "userdata.useQcow2=") ||
+			strings.HasPrefix(l, "firstboot.") {
 			continue
 		}
 		out = append(out, l)
@@ -317,7 +324,6 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 	args := []string{
 		"-avd", name,
 		"-no-window", "-no-audio", "-no-boot-anim",
-		"-gpu", "swiftshader_indirect",
 		"-no-snapshot-load", "-no-snapshot-save",
 	}
 	args = append(args, extraArgs...)
@@ -428,6 +434,13 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 		return "", 0, fmt.Errorf("%w\nEmulator log: %s", err, logPath)
 	}
 
+	// Disable lockscreen and complete setup
+	_ = run(env.ADB, "-s", serial, "shell", "settings", "put", "global", "device_provisioned", "1")
+	_ = run(env.ADB, "-s", serial, "shell", "settings", "put", "secure", "user_setup_complete", "1")
+	_ = run(env.ADB, "-s", serial, "shell", "locksettings", "set-disabled", "true")
+	_ = run(env.ADB, "-s", serial, "shell", "wm", "dismiss-keyguard")
+	_ = run(env.ADB, "-s", serial, "shell", "input", "keyevent", "82") // MENU key to wake/unlock
+
 	if extra > 0 {
 		time.Sleep(extra)
 	}
@@ -436,13 +449,13 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 	return SaveGolden(env, name, dest)
 }
 
-func RunAVD(env Env, name string) error {
+func RunAVD(env Env, name string, extraArgs ...string) error {
 	ensureADB(env)
 	port, err := FindFreeEvenPort(5580, 5800)
 	if err != nil {
 		return err
 	}
-	_, serial, logPath, err := StartEmulatorOnPort(env, name, port)
+	_, serial, logPath, err := StartEmulatorOnPort(env, name, port, extraArgs...)
 	if err != nil {
 		return err
 	}
@@ -552,8 +565,8 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		"-avd", name,
 		"-port", fmt.Sprint(port),
 		"-no-window", "-no-audio", "-no-boot-anim",
-		"-gpu", "swiftshader_indirect",
 		"-no-snapshot-load", "-no-snapshot-save",
+		"-read-only",
 	}
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
@@ -771,6 +784,55 @@ func isPortFree(port int) bool {
 	_ = l.Close()
 	return true
 }
+
+// createSDCard creates an sdcard.img file based on config.ini sdcard.size setting
+func createSDCard(env Env, avdDir, configPath string) error {
+	// Read config.ini to get sdcard.size
+	cfgBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	
+	// Parse sdcard.size (e.g., "512 MB", "512M", "1G")
+	var sdcardSize string
+	for _, line := range strings.Split(string(cfgBytes), "\n") {
+		if strings.HasPrefix(line, "sdcard.size=") {
+			sdcardSize = strings.TrimSpace(strings.TrimPrefix(line, "sdcard.size="))
+			break
+		}
+	}
+	
+	// Default to 512MB if not specified
+	if sdcardSize == "" {
+		sdcardSize = "512M"
+	}
+	
+	// Normalize size format: remove spaces, ensure minimum 9M
+	// "512 MB" -> "512M", "1 GB" -> "1G"
+	sdcardSize = strings.ReplaceAll(sdcardSize, " ", "")
+	sdcardSize = strings.ToUpper(sdcardSize)
+	
+	// Ensure minimum 512M (mksdcard requires at least 9M)
+	if !strings.Contains(sdcardSize, "M") && !strings.Contains(sdcardSize, "G") {
+		sdcardSize = "512M"
+	}
+	
+	// Create sdcard using mksdcard tool
+	sdcardPath := filepath.Join(avdDir, "sdcard.img")
+	mksdcard := filepath.Join(env.SDKRoot, "emulator", "mksdcard")
+	
+	// Try mksdcard first (preferred)
+	if _, err := os.Stat(mksdcard); err == nil {
+		if err := run(mksdcard, sdcardSize, sdcardPath); err != nil {
+			return fmt.Errorf("mksdcard failed: %w", err)
+		}
+		return nil
+	}
+	
+	// Fallback: create empty file with qemu-img
+	return run(env.QemuImg, "create", "-f", "raw", sdcardPath, sdcardSize)
+}
+
 
 // CustomizeStart prepares AVD for manual customization and starts GUI emulator without snapshots.
 // Returns path to emulator log file.

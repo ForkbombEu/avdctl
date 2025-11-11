@@ -125,11 +125,52 @@ func main() {
 	prewarmCmd.Flags().DurationVar(&pwTimeout, "timeout", 3*time.Minute, "boot timeout")
 	root.AddCommand(prewarmCmd)
 
+	// customize-start
+	var csName string
+	customizeStartCmd := &cobra.Command{
+		Use:   "customize-start",
+		Short: "Prepare AVD and start GUI for manual customization (no snapshots)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if csName == "" {
+				return errors.New("--name is required")
+			}
+			logPath, err := core.CustomizeStart(env, csName)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Customize started (log: %s)\n", logPath)
+			return nil
+		},
+	}
+	customizeStartCmd.Flags().StringVar(&csName, "name", "", "AVD name")
+	root.AddCommand(customizeStartCmd)
+
+	// customize-finish
+	var cfName, cfDest string
+	customizeFinishCmd := &cobra.Command{
+		Use:   "customize-finish",
+		Short: "Stop emulator (if running) and export userdata to golden directory (raw IMG format)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if cfName == "" {
+				return errors.New("--name is required")
+			}
+			dst, sz, err := core.CustomizeFinish(env, cfName, cfDest)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Golden saved: %s (%d bytes)\n", dst, sz)
+			return nil
+		},
+	}
+	customizeFinishCmd.Flags().StringVar(&cfName, "name", "", "AVD name")
+	customizeFinishCmd.Flags().StringVar(&cfDest, "dest", "", "Destination directory (default: $AVDCTL_GOLDEN_DIR/<name>-custom)")
+	root.AddCommand(customizeFinishCmd)
+
 	// clone
 	var clBase, clName, clGolden string
 	cloneCmd := &cobra.Command{
 		Use:   "clone",
-		Short: "Create a symlinked clone backed by a golden QCOW2 (uses config template if set)",
+		Short: "Create clone by copying raw IMG files from golden directory (preserves all customizations)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if clBase == "" || clName == "" {
 				return errors.New("--base and --name are required")
@@ -147,7 +188,7 @@ func main() {
 	}
 	cloneCmd.Flags().StringVar(&clBase, "base", "", "Base AVD name (e.g., base-a35)")
 	cloneCmd.Flags().StringVar(&clName, "name", "", "New clone name (e.g., w-<slug>)")
-	cloneCmd.Flags().StringVar(&clGolden, "golden", "", "Path to golden qcow2")
+	cloneCmd.Flags().StringVar(&clGolden, "golden", "", "Path to golden directory")
 	root.AddCommand(cloneCmd)
 
 	// run (supports optional --port for parallel instances)

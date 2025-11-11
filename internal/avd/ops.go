@@ -97,32 +97,59 @@ func InitBase(env Env, name, sysImage, device string) (Info, error) {
 	return infoOf(env, name)
 }
 
+// SaveGolden exports an AVD's writable images (userdata, encryptionkey, cache) to a golden directory.
+// Converts qcow2 overlays to raw IMG format to prevent Android emulator from re-creating overlays on boot.
+// Returns the golden directory path and total size.
 func SaveGolden(env Env, name, dest string) (string, int64, error) {
 	avdPath := filepath.Join(env.AVDHome, name+".avd")
-	src := filepath.Join(avdPath, "userdata-qemu.img.qcow2")
-	if _, err := os.Stat(src); err != nil {
-		src = filepath.Join(avdPath, "userdata.img")
+	
+	// Create golden directory
+	goldenDir := dest
+	if filepath.Ext(dest) == ".qcow2" {
+		// Legacy single-file mode: create directory instead
+		goldenDir = strings.TrimSuffix(dest, ".qcow2")
 	}
-	if _, err := os.Stat(src); err != nil {
-		return "", 0, fmt.Errorf("userdata not found for %s", name)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+	if err := os.MkdirAll(goldenDir, 0o755); err != nil {
 		return "", 0, err
 	}
-	tmp := dest + ".tmp"
-	if err := run(env.QemuImg, "convert", "-O", "qcow2", "-c", src, tmp); err != nil {
-		return "", 0, err
+	
+	// List of writable images to save (base name)
+	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img"}
+	var totalSize int64
+	
+	for _, img := range images {
+		// Prefer qcow2 overlay (has customizations), fallback to raw
+		src := filepath.Join(avdPath, img+".qcow2")
+		if _, err := os.Stat(src); err != nil {
+			src = filepath.Join(avdPath, img)
+			if _, err2 := os.Stat(src); err2 != nil {
+				continue // Skip if not found
+			}
+		}
+		
+		// Convert to raw IMG (not qcow2) to prevent emulator from creating overlays
+		dstFile := filepath.Join(goldenDir, img)
+		tmp := dstFile + ".tmp"
+		if err := run(env.QemuImg, "convert", "-O", "raw", src, tmp); err != nil {
+			return "", 0, fmt.Errorf("convert %s: %w", img, err)
+		}
+		if err := os.Rename(tmp, dstFile); err != nil {
+			return "", 0, err
+		}
+		if st, err := os.Stat(dstFile); err == nil {
+			totalSize += st.Size()
+		}
 	}
-	if err := os.Rename(tmp, dest); err != nil {
-		return "", 0, err
-	}
-	st, _ := os.Stat(dest)
-	return dest, st.Size(), nil
+	
+	return goldenDir, totalSize, nil
 }
 
 // CloneFromGolden creates a new AVD directory as a thin qcow2 overlay
 // backed by the given golden image. It symlinks the base AVD's read-only
 // files, copies (and sanitizes) a config.ini, and returns metadata.
+// CloneFromGolden creates a new AVD directory by copying raw IMG files from golden directory.
+// Uses raw IMG format (not qcow2 overlays) to preserve all customizations.
+// It symlinks the base AVD's read-only files and copies (and sanitizes) a config.ini.
 func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	baseDir := filepath.Join(env.AVDHome, base+".avd")
 	cloneDir := filepath.Join(env.AVDHome, name+".avd")
@@ -134,13 +161,22 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 		return Info{}, err
 	}
 
+	// Resolve golden path (can be directory or legacy .qcow2 file)
+	goldenDir := golden
+	if filepath.Ext(golden) == ".qcow2" {
+		goldenDir = filepath.Dir(golden)
+	}
+	absGoldenDir, err := filepath.Abs(goldenDir)
+	if err != nil {
+		return Info{}, fmt.Errorf("resolve golden path: %w", err)
+	}
+
 	// ---------------------------------------------------------------------
-	// 1. Copy or template the config.ini
+	// 1. Copy or template the config.ini and disable qcow2
 	// ---------------------------------------------------------------------
 	tpl := os.Getenv("AVDCTL_CONFIG_TEMPLATE")
 	dstCfg := filepath.Join(cloneDir, "config.ini")
 	var cfgBytes []byte
-	var err error
 
 	switch {
 	case tpl != "":
@@ -156,12 +192,18 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	cfgBytes = sanitizeConfigINI(cfgBytes)
-	if err := os.WriteFile(dstCfg, cfgBytes, 0o644); err != nil {
+	// Force raw IMG usage (disable qcow2)
+	cfgStr := string(cfgBytes)
+	cfgStr = strings.ReplaceAll(cfgStr, "userdata.useQcow2=yes", "userdata.useQcow2=no")
+	if !strings.Contains(cfgStr, "userdata.useQcow2") {
+		cfgStr += "\nuserdata.useQcow2=no\n"
+	}
+	if err := os.WriteFile(dstCfg, []byte(cfgStr), 0o644); err != nil {
 		return Info{}, fmt.Errorf("write clone config: %w", err)
 	}
 
 	// ---------------------------------------------------------------------
-	// 2. Symlink all other read-only artifacts from base to clone
+	// 2. Symlink read-only artifacts from base to clone
 	// ---------------------------------------------------------------------
 	err = filepath.WalkDir(baseDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -172,13 +214,13 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 		}
 		rel, _ := filepath.Rel(baseDir, path)
 
-		// Skip dirs/files we don’t want
+		// Skip: snapshots, cache*, userdata*, encryptionkey*, config.ini, locks
 		if strings.HasPrefix(rel, "snapshots") ||
 			strings.HasPrefix(rel, "cache") ||
-			rel == "config.ini" ||
 			strings.HasPrefix(rel, "userdata") ||
-			strings.HasSuffix(rel, ".lock") ||
-			strings.HasSuffix(rel, ".qcow2") {
+			strings.HasPrefix(rel, "encryptionkey") ||
+			rel == "config.ini" ||
+			strings.HasSuffix(rel, ".lock") {
 			return nil
 		}
 
@@ -197,17 +239,24 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	// ---------------------------------------------------------------------
-	// 3. Create the qcow2 overlay for userdata
+	// 3. Copy raw IMG files from golden directory
 	// ---------------------------------------------------------------------
-	overlay := filepath.Join(cloneDir, "userdata-qemu.img.qcow2")
-	absGolden, err := filepath.Abs(golden)
-	if err != nil {
-		return Info{}, fmt.Errorf("resolve golden path: %w", err)
-	}
-	if err := run(env.QemuImg,
-		"create", "-f", "qcow2", "-F", "qcow2",
-		"-b", absGolden, overlay); err != nil {
-		return Info{}, fmt.Errorf("create overlay: %w", err)
+	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img"}
+	for _, img := range images {
+		goldenFile := filepath.Join(absGoldenDir, img)
+		if _, err := os.Stat(goldenFile); err != nil {
+			continue // Skip if golden image doesn't exist
+		}
+		
+		dstFile := filepath.Join(cloneDir, img)
+		// Copy raw IMG file
+		srcData, err := os.ReadFile(goldenFile)
+		if err != nil {
+			return Info{}, fmt.Errorf("read golden %s: %w", img, err)
+		}
+		if err := os.WriteFile(dstFile, srcData, 0o600); err != nil {
+			return Info{}, fmt.Errorf("write clone %s: %w", img, err)
+		}
 	}
 
 	// ---------------------------------------------------------------------
@@ -216,7 +265,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	_ = os.RemoveAll(filepath.Join(cloneDir, "snapshots"))
 
 	// ---------------------------------------------------------------------
-	// 5. Create the ini avd file
+	// 5. Create the .ini file
 	// ---------------------------------------------------------------------
 	ini := filepath.Join(env.AVDHome, name+".ini")
 	body := fmt.Sprintf(
@@ -230,11 +279,12 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// ---------------------------------------------------------------------
 	// 6. Report size & info
 	// ---------------------------------------------------------------------
-	fi, _ := os.Stat(overlay)
+	userdata := filepath.Join(cloneDir, "userdata-qemu.img")
+	fi, _ := os.Stat(userdata)
 	info := Info{
 		Name:      name,
 		Path:      cloneDir,
-		Userdata:  overlay,
+		Userdata:  userdata,
 		SizeBytes: fi.Size(),
 	}
 	return info, nil
@@ -266,11 +316,9 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 		"-no-window", "-no-audio", "-no-boot-anim",
 		"-gpu", "swiftshader_indirect",
 		"-no-snapshot-load", "-no-snapshot-save",
-		"-read-only",
 	}
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
-	// Disable QEMU file locking to allow parallel instances with shared backing files
 	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off")
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("emulator start: %w", err)
@@ -364,9 +412,13 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 	if err := WaitForBoot(env, serial, bootTimeout); err != nil {
 		// Check if userdata was created (indicates boot likely succeeded)
 		avdPath := filepath.Join(env.AVDHome, name+".avd")
-		userdata := filepath.Join(avdPath, "userdata-qemu.img")
-		if st, statErr := os.Stat(userdata); statErr == nil && st.Size() > 1024*1024 {
-			// Userdata exists and is large enough - boot likely succeeded
+		userdata1 := filepath.Join(avdPath, "userdata-qemu.img.qcow2")
+		userdata2 := filepath.Join(avdPath, "userdata-qemu.img")
+		if st, statErr := os.Stat(userdata1); statErr == nil && st.Size() > 1024*1024 {
+			KillEmulator(env, serial)
+			return SaveGolden(env, name, dest)
+		}
+		if st, statErr := os.Stat(userdata2); statErr == nil && st.Size() > 1024*1024 {
 			KillEmulator(env, serial)
 			return SaveGolden(env, name, dest)
 		}
@@ -427,6 +479,9 @@ func BakeAPK(env Env, base, name, golden string, apks []string, timeout time.Dur
 	// Return overlay path and size
 	cloneDir := filepath.Join(env.AVDHome, name+".avd")
 	ud := filepath.Join(cloneDir, "userdata-qemu.img.qcow2")
+	if _, err := os.Stat(ud); err != nil {
+		ud = filepath.Join(cloneDir, "userdata-qemu.img")
+	}
 	st, _ := os.Stat(ud)
 	return ud, st.Size(), nil
 }
@@ -444,7 +499,12 @@ func infoOf(env Env, name string) (Info, error) {
 	dir := filepath.Join(env.AVDHome, name+".avd")
 	ud := filepath.Join(dir, "userdata-qemu.img.qcow2")
 	if _, err := os.Stat(ud); err != nil {
-		ud = filepath.Join(dir, "userdata.img")
+		alt := filepath.Join(dir, "userdata-qemu.img")
+		if _, err2 := os.Stat(alt); err2 == nil {
+			ud = alt
+		} else {
+			ud = filepath.Join(dir, "userdata.img")
+		}
 	}
 	var sz int64
 	if st, err := os.Stat(ud); err == nil {
@@ -491,14 +551,11 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		"-no-window", "-no-audio", "-no-boot-anim",
 		"-gpu", "swiftshader_indirect",
 		"-no-snapshot-load", "-no-snapshot-save",
-		"-read-only",
 	}
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
-	// Capture logs for troubleshooting
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
-	// Disable QEMU file locking to allow parallel instances with shared backing files
 	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off")
 
 	if err := cmd.Start(); err != nil {
@@ -555,13 +612,14 @@ func GetAVDNameFromSerial(env Env, serial string) (string, error) {
 	var buf bytes.Buffer
 	cmd := exec.Command(env.ADB, "-s", serial, "emu", "avd", "name")
 	cmd.Stdout = &buf
-	// Clean up adb’s “OK” suffix and whitespace
+	_ = cmd.Run()
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) == 0 {
 		return "", nil
 	}
-
-	// The first line is the AVD name
+	if strings.TrimSpace(lines[len(lines)-1]) == "OK" && len(lines) > 1 {
+		lines = lines[:len(lines)-1]
+	}
 	name := strings.TrimSpace(lines[0])
 	return name, nil
 }
@@ -709,6 +767,62 @@ func isPortFree(port int) bool {
 	}
 	_ = l.Close()
 	return true
+}
+
+// CustomizeStart prepares AVD for manual customization and starts GUI emulator without snapshots.
+// Returns path to emulator log file.
+func CustomizeStart(env Env, name string) (string, error) {
+	if name == "" {
+		return "", errors.New("empty name")
+	}
+	avdDir := filepath.Join(env.AVDHome, name+".avd")
+	cfg := filepath.Join(avdDir, "config.ini")
+	b, err := os.ReadFile(cfg)
+	if err != nil {
+		return "", fmt.Errorf("read config: %w", err)
+	}
+	if err := os.WriteFile(cfg, sanitizeConfigINI(b), 0o644); err != nil {
+		return "", fmt.Errorf("write config: %w", err)
+	}
+	_ = os.RemoveAll(filepath.Join(avdDir, "snapshots"))
+
+	logPath := filepath.Join(os.TempDir(), fmt.Sprintf("emulator-%s-customize.log", name))
+	lf, err := os.Create(logPath)
+	if err != nil {
+		return "", fmt.Errorf("open log: %w", err)
+	}
+	args := []string{"-avd", name, "-no-snapshot-load", "-no-snapshot-save"}
+	cmd := exec.Command(env.Emulator, args...)
+	cmd.Stdout = lf
+	cmd.Stderr = lf
+	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off")
+	if err := cmd.Start(); err != nil {
+		_ = lf.Close()
+		return "", fmt.Errorf("emulator start: %w", err)
+	}
+	return logPath, nil
+}
+
+// CustomizeFinish stops the emulator (if running) and exports userdata to a golden qcow2.
+func CustomizeFinish(env Env, name, dest string) (string, int64, error) {
+	if name == "" {
+		return "", 0, errors.New("empty name")
+	}
+	if procs, err := ListRunning(env); err == nil {
+		for _, p := range procs {
+			if p.Name == name {
+				KillEmulator(env, p.Serial)
+				time.Sleep(1 * time.Second)
+				break
+			}
+		}
+	}
+	if dest == "" {
+		dir := env.GoldenDir
+		_ = os.MkdirAll(dir, 0o755)
+		dest = filepath.Join(dir, fmt.Sprintf("%s-custom.qcow2", name))
+	}
+	return SaveGolden(env, name, dest)
 }
 
 // Stop by serial (clean). Falls back to SIGTERM if adb fails.

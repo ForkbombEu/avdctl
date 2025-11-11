@@ -20,7 +20,7 @@ func main() {
 	env := avd.Detect()
 
 	// Use your existing golden image created with customize-start/finish
-	baseName := "base-customizable-full" // Your base AVD
+	baseName := "credimi" // Your base AVD
 	goldenPath := filepath.Join(os.Getenv("HOME"), "avd-golden", "credimi-golden")
 	customers := []string{"acme", "globex", "initech"}
 

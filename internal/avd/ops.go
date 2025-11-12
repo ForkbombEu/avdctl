@@ -460,8 +460,8 @@ func RunAVD(env Env, name string, extraArgs ...string) error {
 		return err
 	}
 
-	// wait up to 30s for adb to see this exact serial
-	if err := waitForEmulatorSerial(env, serial, 30*time.Second); err != nil {
+	// wait up to 60s for adb to see this exact serial
+	if err := waitForEmulatorSerial(env, serial, 60*time.Second); err != nil {
 		return fmt.Errorf("%w\nemulator log: %s", err, logPath)
 	}
 	fmt.Printf("Started %s on %s (log: %s)\n", name, serial, logPath)

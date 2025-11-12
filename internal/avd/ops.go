@@ -102,7 +102,7 @@ func InitBase(env Env, name, sysImage, device string) (Info, error) {
 // Returns the golden directory path and total size.
 func SaveGolden(env Env, name, dest string) (string, int64, error) {
 	avdPath := filepath.Join(env.AVDHome, name+".avd")
-	
+
 	// Create golden directory
 	goldenDir := dest
 	if filepath.Ext(dest) == ".qcow2" {
@@ -112,11 +112,11 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 	if err := os.MkdirAll(goldenDir, 0o755); err != nil {
 		return "", 0, err
 	}
-	
+
 	// List of writable images to save (base name)
 	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img", "sdcard.img"}
 	var totalSize int64
-	
+
 	for _, img := range images {
 		// Prefer qcow2 overlay (has customizations), fallback to raw
 		src := filepath.Join(avdPath, img+".qcow2")
@@ -126,7 +126,7 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 				continue // Skip if not found
 			}
 		}
-		
+
 		// Convert to raw IMG (not qcow2) to prevent emulator from creating overlays
 		dstFile := filepath.Join(goldenDir, img)
 		tmp := dstFile + ".tmp"
@@ -140,7 +140,7 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 			totalSize += st.Size()
 		}
 	}
-	
+
 	return goldenDir, totalSize, nil
 }
 
@@ -253,7 +253,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 			}
 			continue // Skip if golden image doesn't exist
 		}
-		
+
 		dstFile := filepath.Join(cloneDir, img)
 		// Copy raw IMG file
 		srcData, err := os.ReadFile(goldenFile)
@@ -413,7 +413,7 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 	defer func() { _ = cmd.Process.Kill() }()
 
 	// Wait until adb sees that specific emulator serial
-	if err := waitForEmulatorSerial(env, serial, 30*time.Second); err != nil {
+	if err := waitForEmulatorSerial(env, serial, 60*time.Second); err != nil {
 		return "", 0, fmt.Errorf("ADB failed to detect emulator serial %s: %w\nEmulator log: %s\nNote: The emulator may still be starting. Check the log file for details.", serial, err, logPath)
 	}
 
@@ -792,7 +792,7 @@ func createSDCard(env Env, avdDir, configPath string) error {
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
 	}
-	
+
 	// Parse sdcard.size (e.g., "512 MB", "512M", "1G")
 	var sdcardSize string
 	for _, line := range strings.Split(string(cfgBytes), "\n") {
@@ -801,26 +801,26 @@ func createSDCard(env Env, avdDir, configPath string) error {
 			break
 		}
 	}
-	
+
 	// Default to 512MB if not specified
 	if sdcardSize == "" {
 		sdcardSize = "512M"
 	}
-	
+
 	// Normalize size format: remove spaces, ensure minimum 9M
 	// "512 MB" -> "512M", "1 GB" -> "1G"
 	sdcardSize = strings.ReplaceAll(sdcardSize, " ", "")
 	sdcardSize = strings.ToUpper(sdcardSize)
-	
+
 	// Ensure minimum 512M (mksdcard requires at least 9M)
 	if !strings.Contains(sdcardSize, "M") && !strings.Contains(sdcardSize, "G") {
 		sdcardSize = "512M"
 	}
-	
+
 	// Create sdcard using mksdcard tool
 	sdcardPath := filepath.Join(avdDir, "sdcard.img")
 	mksdcard := filepath.Join(env.SDKRoot, "emulator", "mksdcard")
-	
+
 	// Try mksdcard first (preferred)
 	if _, err := os.Stat(mksdcard); err == nil {
 		if err := run(mksdcard, sdcardSize, sdcardPath); err != nil {
@@ -828,11 +828,10 @@ func createSDCard(env Env, avdDir, configPath string) error {
 		}
 		return nil
 	}
-	
+
 	// Fallback: create empty file with qemu-img
 	return run(env.QemuImg, "create", "-f", "raw", sdcardPath, sdcardSize)
 }
-
 
 // CustomizeStart prepares AVD for manual customization and starts GUI emulator without snapshots.
 // Returns path to emulator log file.

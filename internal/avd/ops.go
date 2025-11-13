@@ -259,7 +259,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 		if err != nil {
 			return Info{}, fmt.Errorf("open golden %s: %w", img, err)
 		}
-		dst, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		dst, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 		if err != nil {
 			src.Close()
 			return Info{}, fmt.Errorf("create clone %s: %w", img, err)
@@ -345,7 +345,6 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 		"-no-location-ui",
 		"-no-audio",
 		"-read-only",
-		"-accel", "on",
 		"-gpu", "swiftshader_indirect",
 		"-logcat", "*:S",
 	}
@@ -598,7 +597,6 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		"-no-location-ui",
 		"-no-audio",
 		"-read-only",
-		"-accel", "on",
 		"-gpu", "swiftshader_indirect",
 		"-logcat", "*:S",
 	}

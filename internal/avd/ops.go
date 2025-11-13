@@ -323,9 +323,21 @@ func sanitizeConfigINI(b []byte) []byte {
 func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error) {
 	args := []string{
 		"-avd", name,
-		"-no-window", "-no-audio", "-no-boot-anim",
-		"-no-snapshot-load", "-no-snapshot-save",
+		"-no-window",
+		"-no-boot-anim",
+		"-no-snapshot",
+		"-no-snapshot-load",
+		"-no-snapshot-save",
+		"-skip-adb-auth",
+		"-no-metrics",
+		"-no-location-ui",
+		"-no-audio",
+		"-read-only",
+		"-accel", "on",
+		"-gpu", "swiftshader_indirect",
+		"-logcat", "*:S",
 	}
+
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
 	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null")
@@ -564,10 +576,21 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 	args := []string{
 		"-avd", name,
 		"-port", fmt.Sprint(port),
-		"-no-window", "-no-audio", "-no-boot-anim",
-		"-no-snapshot-load", "-no-snapshot-save",
+		"-no-window",
+		"-no-boot-anim",
+		"-no-snapshot",
+		"-no-snapshot-load",
+		"-no-snapshot-save",
+		"-skip-adb-auth",
+		"-no-metrics",
+		"-no-location-ui",
+		"-no-audio",
 		"-read-only",
+		"-accel", "on",
+		"-gpu", "swiftshader_indirect",
+		"-logcat", "*:S",
 	}
+
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
 	cmd.Stdout = logFile

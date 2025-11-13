@@ -144,15 +144,16 @@ func (m *Manager) Clone(opts CloneOptions) (AVDInfo, error) {
 	}, nil
 }
 
-// Run starts an emulator instance headless.
-func (m *Manager) Run(opts RunOptions) error {
+// Run starts an emulator instance headless and returns the serial.
+func (m *Manager) Run(opts RunOptions) (string, error) {
 	return avd.RunAVD(m.env, opts.Name)
 }
 
 // RunOnPort starts an emulator instance on a specific port.
 func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err error) {
 	if opts.Port == 0 {
-		return "", "", avd.RunAVD(m.env, opts.Name)
+		serial, err := avd.RunAVD(m.env, opts.Name)
+		return serial, "", err
 	}
 	_, serial, logPath, err = avd.StartEmulatorOnPort(m.env, opts.Name, opts.Port)
 	return serial, logPath, err

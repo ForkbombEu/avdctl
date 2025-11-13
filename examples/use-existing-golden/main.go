@@ -55,22 +55,13 @@ func main() {
 			cloneName := "w-" + cust
 
 			// Start emulator in background
-			if err := avd.RunAVD(env, cloneName); err != nil {
+			serial, err := avd.RunAVD(env, cloneName)
+			if err != nil {
 				results <- fmt.Sprintf("✗ %s: failed to start (%v)", cust, err)
 				return
 			}
 
-			results <- fmt.Sprintf("→ %s: starting emulator...", cust)
-
-			// Give it a moment to register with adb
-			time.Sleep(2 * time.Second)
-
-			// Guess serial
-			serial, err := avd.GuessEmulatorSerial(env)
-			if err != nil {
-				results <- fmt.Sprintf("✗ %s: failed to get serial (%v)", cust, err)
-				return
-			}
+			results <- fmt.Sprintf("→ %s: starting emulator on %s...", cust, serial)
 
 			// Wait for boot
 			if err := avd.WaitForBoot(env, serial, 120*time.Second); err != nil {

@@ -144,12 +144,11 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 	return goldenDir, totalSize, nil
 }
 
-// CloneFromGolden creates a new AVD directory as a thin qcow2 overlay
+// CloneFromGolden creates a new AVD directory as a thin QCOW2 overlay
 // backed by the given golden image. It symlinks the base AVD's read-only
-// files, copies (and sanitizes) a config.ini, and returns metadata.
-// CloneFromGolden creates a new AVD directory by copying raw IMG files from golden directory.
-// Uses raw IMG format (not qcow2 overlays) to preserve all customizations.
-// It symlinks the base AVD's read-only files and copies (and sanitizes) a config.ini.
+// files (system images, ROMs), creates QCOW2 overlays for writable images
+// (userdata, cache, encryptionkey), and returns metadata.
+// This provides instant cloning with copy-on-write semantics.
 func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	baseDir := filepath.Join(env.AVDHome, base+".avd")
 	cloneDir := filepath.Join(env.AVDHome, name+".avd")
@@ -192,11 +191,11 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	cfgBytes = sanitizeConfigINI(cfgBytes)
-	// Force raw IMG usage (disable qcow2)
+	// Enable QCOW2 overlays for instant cloning and CoW
 	cfgStr := string(cfgBytes)
-	cfgStr = strings.ReplaceAll(cfgStr, "userdata.useQcow2=yes", "userdata.useQcow2=no")
+	cfgStr = strings.ReplaceAll(cfgStr, "userdata.useQcow2=no", "userdata.useQcow2=yes")
 	if !strings.Contains(cfgStr, "userdata.useQcow2") {
-		cfgStr += "\nuserdata.useQcow2=no\n"
+		cfgStr += "\nuserdata.useQcow2=yes\n"
 	}
 	if err := os.WriteFile(dstCfg, []byte(cfgStr), 0o644); err != nil {
 		return Info{}, fmt.Errorf("write clone config: %w", err)
@@ -239,7 +238,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	// ---------------------------------------------------------------------
-	// 3. Copy raw IMG files from golden directory
+	// 3. Create QCOW2 overlays backed by golden images (instant, copy-on-write)
 	// ---------------------------------------------------------------------
 	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img", "sdcard.img"}
 	for _, img := range images {
@@ -254,14 +253,12 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 			continue // Skip if golden image doesn't exist
 		}
 
-		dstFile := filepath.Join(cloneDir, img)
-		// Copy raw IMG file
-		srcData, err := os.ReadFile(goldenFile)
-		if err != nil {
-			return Info{}, fmt.Errorf("read golden %s: %w", img, err)
-		}
-		if err := os.WriteFile(dstFile, srcData, 0o600); err != nil {
-			return Info{}, fmt.Errorf("write clone %s: %w", img, err)
+		// Create QCOW2 overlay backed by golden (instant operation, no data copying)
+		overlay := filepath.Join(cloneDir, img+".qcow2")
+		if err := run(env.QemuImg,
+			"create", "-f", "qcow2", "-F", "raw",
+			"-b", goldenFile, overlay); err != nil {
+			return Info{}, fmt.Errorf("create overlay for %s: %w", img, err)
 		}
 	}
 
@@ -285,10 +282,15 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// ---------------------------------------------------------------------
 	// 6. Report size & info
 	// ---------------------------------------------------------------------
-	userdata := filepath.Join(cloneDir, "userdata-qemu.img")
+	// Check for QCOW2 overlay first, fallback to raw IMG
+	userdata := filepath.Join(cloneDir, "userdata-qemu.img.qcow2")
 	fi, err := os.Stat(userdata)
 	if err != nil {
-		return Info{}, fmt.Errorf("stat userdata: %w", err)
+		userdata = filepath.Join(cloneDir, "userdata-qemu.img")
+		fi, err = os.Stat(userdata)
+		if err != nil {
+			return Info{}, fmt.Errorf("stat userdata: %w", err)
+		}
 	}
 	info := Info{
 		Name:      name,
@@ -461,23 +463,23 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 	return SaveGolden(env, name, dest)
 }
 
-func RunAVD(env Env, name string, extraArgs ...string) error {
+func RunAVD(env Env, name string, extraArgs ...string) (string, error) {
 	ensureADB(env)
 	port, err := FindFreeEvenPort(5580, 5800)
 	if err != nil {
-		return err
+		return "", err
 	}
 	_, serial, logPath, err := StartEmulatorOnPort(env, name, port, extraArgs...)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	// wait up to 60s for adb to see this exact serial
 	if err := waitForEmulatorSerial(env, serial, 60*time.Second); err != nil {
-		return fmt.Errorf("%w\nemulator log: %s", err, logPath)
+		return "", fmt.Errorf("%w\nemulator log: %s", err, logPath)
 	}
 	fmt.Printf("Started %s on %s (log: %s)\n", name, serial, logPath)
-	return nil
+	return serial, nil
 }
 
 func BakeAPK(env Env, base, name, golden string, apks []string, timeout time.Duration) (string, int64, error) {

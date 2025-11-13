@@ -48,9 +48,11 @@ func Example_basicUsage() {
 	fmt.Printf("Clone created: %s\n", clone1.Name)
 
 	// Run the clone
-	if err := mgr.Run(avdmanager.RunOptions{Name: "customer1"}); err != nil {
+	serial, err := mgr.Run(avdmanager.RunOptions{Name: "customer1"})
+	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("Started on serial: %s\n", serial)
 
 	// List running instances
 	running, err := mgr.ListRunning()

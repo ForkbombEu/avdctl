@@ -224,12 +224,11 @@ func main() {
 			}
 
 			// Auto-pick a free even port
-			if err := core.RunAVD(env, runName, extraArgs...); err != nil {
+			_, err := core.RunAVD(env, runName, extraArgs...)
+			if err != nil {
 				return err
 			}
-			// RunAVD prints “Started <name> on emulator-<port>” itself (if you used that version),
-			// otherwise you can print a generic confirmation here:
-			// fmt.Println("Started", runName)
+			// RunAVD prints "Started <name> on emulator-<port>" itself
 			return nil
 		},
 	}

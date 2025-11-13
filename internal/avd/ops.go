@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -144,11 +145,10 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 	return goldenDir, totalSize, nil
 }
 
-// CloneFromGolden creates a new AVD directory as a thin QCOW2 overlay
-// backed by the given golden image. It symlinks the base AVD's read-only
-// files (system images, ROMs), creates QCOW2 overlays for writable images
-// (userdata, cache, encryptionkey), and returns metadata.
-// This provides instant cloning with copy-on-write semantics.
+// CloneFromGolden creates a new AVD directory by copying raw IMG files from golden directory.
+// Uses full file copy (not QCOW2 overlays) to preserve all customizations independently.
+// It symlinks the base AVD's read-only files (system images, ROMs) and copies writable images.
+// Cloning takes time proportional to golden image size but ensures full isolation.
 func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	baseDir := filepath.Join(env.AVDHome, base+".avd")
 	cloneDir := filepath.Join(env.AVDHome, name+".avd")
@@ -191,11 +191,11 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	cfgBytes = sanitizeConfigINI(cfgBytes)
-	// Enable QCOW2 overlays for instant cloning and CoW
+	// Disable QCOW2 overlays (use raw IMG full copies)
 	cfgStr := string(cfgBytes)
-	cfgStr = strings.ReplaceAll(cfgStr, "userdata.useQcow2=no", "userdata.useQcow2=yes")
+	cfgStr = strings.ReplaceAll(cfgStr, "userdata.useQcow2=yes", "userdata.useQcow2=no")
 	if !strings.Contains(cfgStr, "userdata.useQcow2") {
-		cfgStr += "\nuserdata.useQcow2=yes\n"
+		cfgStr += "\nuserdata.useQcow2=no\n"
 	}
 	if err := os.WriteFile(dstCfg, []byte(cfgStr), 0o644); err != nil {
 		return Info{}, fmt.Errorf("write clone config: %w", err)
@@ -238,7 +238,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	// ---------------------------------------------------------------------
-	// 3. Create QCOW2 overlays backed by golden images (instant, copy-on-write)
+	// 3. Copy raw IMG files from golden directory (full copy, no overlays)
 	// ---------------------------------------------------------------------
 	images := []string{"userdata-qemu.img", "encryptionkey.img", "cache.img", "sdcard.img"}
 	for _, img := range images {
@@ -253,12 +253,22 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 			continue // Skip if golden image doesn't exist
 		}
 
-		// Create QCOW2 overlay backed by golden (instant operation, no data copying)
-		overlay := filepath.Join(cloneDir, img+".qcow2")
-		if err := run(env.QemuImg,
-			"create", "-f", "qcow2", "-F", "raw",
-			"-b", goldenFile, overlay); err != nil {
-			return Info{}, fmt.Errorf("create overlay for %s: %w", img, err)
+		dstFile := filepath.Join(cloneDir, img)
+		// Stream copy to avoid loading entire file into memory
+		src, err := os.Open(goldenFile)
+		if err != nil {
+			return Info{}, fmt.Errorf("open golden %s: %w", img, err)
+		}
+		dst, err := os.OpenFile(dstFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		if err != nil {
+			src.Close()
+			return Info{}, fmt.Errorf("create clone %s: %w", img, err)
+		}
+		_, err = io.Copy(dst, src)
+		src.Close()
+		dst.Close()
+		if err != nil {
+			return Info{}, fmt.Errorf("copy %s: %w", img, err)
 		}
 	}
 
@@ -282,11 +292,11 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// ---------------------------------------------------------------------
 	// 6. Report size & info
 	// ---------------------------------------------------------------------
-	// Check for QCOW2 overlay first, fallback to raw IMG
-	userdata := filepath.Join(cloneDir, "userdata-qemu.img.qcow2")
+	// Check for raw IMG first (full copy), fallback to QCOW2 overlay
+	userdata := filepath.Join(cloneDir, "userdata-qemu.img")
 	fi, err := os.Stat(userdata)
 	if err != nil {
-		userdata = filepath.Join(cloneDir, "userdata-qemu.img")
+		userdata = filepath.Join(cloneDir, "userdata-qemu.img.qcow2")
 		fi, err = os.Stat(userdata)
 		if err != nil {
 			return Info{}, fmt.Errorf("stat userdata: %w", err)

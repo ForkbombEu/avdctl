@@ -261,14 +261,18 @@ Many operations call `ensureADB` (idempotent `adb start-server`) before proceedi
 
 **Function**: `internal/avd/ops.go:524-544`
 
-### 7. Clone Uses QCOW2 Overlays (Instant, Copy-on-Write)
+### 7. Clone Uses Full Raw Image Copies
 
-Clones are created instantly (~0.15s) using QCOW2 overlays backed by golden images. Symlinks are used for read-only base AVD files (system images, ROMs). Writable files (userdata, cache, encryptionkey, sdcard) get thin QCOW2 overlays (~196KB each) backed by golden raw IMG files. This provides true copy-on-write: clones start small and only grow as data diverges from the golden.
+Clones are created by copying full raw IMG files from golden directory (~40s for 6GB). Symlinks are used for read-only base AVD files (system images, ROMs). Writable files (userdata, cache, encryptionkey, sdcard) are fully copied as raw IMG files. This ensures complete isolation and preserves all golden customizations.
 
 **Function**: `CloneFromGolden` (`internal/avd/ops.go:147-300`)
-**Key changes (Nov 2025)**: Restored QCOW2 overlay approach (was temporarily changed to slow memory-copy in commit 612c238). QCOW2 overlays backed by raw golden images (`-F raw -b <golden>`), config sets `userdata.useQcow2=yes`, emulators run with `QEMU_FILE_LOCKING=off` for parallel instances.
+**Method**: Uses `io.Copy` for streaming (doesn't load entire file into memory), config sets `userdata.useQcow2=no`
 
-**Why this matters**: Previous implementation copied 6GB+ files into memory during cloning, causing timeouts with Maestro and other automation tools. QCOW2 overlays are instant and allow multiple clones to share golden backing files safely.
+**Trade-offs**:
+- Clone time: ~40s for 6GB golden (proportional to size)
+- Disk usage: Full copy per clone (6GB+ each)
+- Isolation: Complete (each clone fully independent)
+- Compatibility: Works with all emulator versions and tools like Maestro
 
 ### 8. Prewarm Uses Fixed Port 5580
 

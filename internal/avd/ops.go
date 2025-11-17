@@ -273,9 +273,15 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	}
 
 	// ---------------------------------------------------------------------
-	// 4. Remove stale snapshot dirs if any
+	// 4. Remove stale snapshot dirs and qcow2 overlays if any
 	// ---------------------------------------------------------------------
 	_ = os.RemoveAll(filepath.Join(cloneDir, "snapshots"))
+
+	// Remove any leftover qcow2 overlay files to ensure clean raw IMG usage
+	qcow2Files, _ := filepath.Glob(filepath.Join(cloneDir, "*.qcow2"))
+	for _, f := range qcow2Files {
+		_ = os.Remove(f)
+	}
 
 	// ---------------------------------------------------------------------
 	// 5. Create the .ini file

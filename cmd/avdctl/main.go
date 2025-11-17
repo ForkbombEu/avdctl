@@ -194,7 +194,6 @@ func main() {
 	// run (supports optional --port for parallel instances)
 	var runName string
 	var runPort int
-	var runGPU string
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run an AVD headless (no snapshots); supports parallel instances",
@@ -204,18 +203,12 @@ func main() {
 			}
 			env := core.Detect()
 
-			// Build extra args with GPU mode
-			extraArgs := []string{}
-			if runGPU != "" {
-				extraArgs = append(extraArgs, "-gpu", runGPU)
-			}
-
 			if runPort > 0 {
 				if runPort%2 != 0 {
 					return fmt.Errorf("--port must be even")
 				}
 				// Deterministic port
-				_, _, logPath, err := core.StartEmulatorOnPort(env, runName, runPort, extraArgs...)
+				_, _, logPath, err := core.StartEmulatorOnPort(env, runName, runPort)
 				if err != nil {
 					return err
 				}
@@ -224,7 +217,7 @@ func main() {
 			}
 
 			// Auto-pick a free even port
-			_, err := core.RunAVD(env, runName, extraArgs...)
+			_, err := core.RunAVD(env, runName)
 			if err != nil {
 				return err
 			}
@@ -234,7 +227,6 @@ func main() {
 	}
 	runCmd.Flags().StringVar(&runName, "name", "", "AVD name to run")
 	runCmd.Flags().IntVar(&runPort, "port", 0, "even TCP port to bind emulator (auto if omitted)")
-	runCmd.Flags().StringVar(&runGPU, "gpu", "auto-no-window", "GPU mode (auto-no-window, host, swiftshader_indirect, guest)")
 	root.AddCommand(runCmd)
 
 	// bake-apk

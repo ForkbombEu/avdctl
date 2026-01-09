@@ -4,6 +4,7 @@
 package avd
 
 import (
+	"context"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -22,6 +23,8 @@ type Env struct {
 	QemuImg    string // qemu-img
 	// CorrelationID is used to tie logs to a specific workflow/activity.
 	CorrelationID string
+	// Context is used to parent OpenTelemetry spans.
+	Context context.Context
 }
 
 func Detect() Env {
@@ -44,17 +47,18 @@ func Detect() Env {
 	}
 
 	return Env{
-		SDKRoot:    sdk,
-		AVDHome:    avd,
-		GoldenDir:  gold,
-		ClonesDir:  clns,
-		ConfigTpl:  tpl,
-		Emulator:   "emulator",
-		ADB:        "adb",
-		AvdMgr:     "avdmanager",
-		SdkManager: "sdkmanager",
-		QemuImg:    "qemu-img",
+		SDKRoot:       sdk,
+		AVDHome:       avd,
+		GoldenDir:     gold,
+		ClonesDir:     clns,
+		ConfigTpl:     tpl,
+		Emulator:      "emulator",
+		ADB:           "adb",
+		AvdMgr:        "avdmanager",
+		SdkManager:    "sdkmanager",
+		QemuImg:       "qemu-img",
 		CorrelationID: correlationID,
+		Context:       context.Background(),
 	}
 }
 

@@ -6,6 +6,7 @@
 package avdmanager
 
 import (
+	"context"
 	"time"
 
 	"github.com/forkbombeu/avdctl/internal/avd"
@@ -25,7 +26,21 @@ func New() *Manager {
 
 // NewWithCorrelationID creates a new AVD Manager with a correlation ID for structured logs.
 func NewWithCorrelationID(correlationID string) *Manager {
+	return NewWithContextAndCorrelationID(context.Background(), correlationID)
+}
+
+// NewWithContext creates a new AVD Manager with a custom context for tracing.
+func NewWithContext(ctx context.Context) *Manager {
+	return NewWithContextAndCorrelationID(ctx, "")
+}
+
+// NewWithContextAndCorrelationID creates a new AVD Manager with a custom context and correlation ID.
+func NewWithContextAndCorrelationID(ctx context.Context, correlationID string) *Manager {
 	env := avd.Detect()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	env.Context = ctx
 	env.CorrelationID = correlationID
 	return &Manager{
 		env: env,
@@ -34,36 +49,42 @@ func NewWithCorrelationID(correlationID string) *Manager {
 
 // NewWithEnv creates a new AVD Manager with custom environment configuration.
 func NewWithEnv(env Environment) *Manager {
+	ctx := env.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return &Manager{
 		env: avd.Env{
-			SDKRoot:    env.SDKRoot,
-			AVDHome:    env.AVDHome,
-			GoldenDir:  env.GoldenDir,
-			ClonesDir:  env.ClonesDir,
-			ConfigTpl:  env.ConfigTemplate,
-			Emulator:   env.EmulatorBin,
-			ADB:        env.ADBBin,
-			AvdMgr:     env.AvdManagerBin,
-			SdkManager: env.SdkManagerBin,
-			QemuImg:    env.QemuImgBin,
+			SDKRoot:       env.SDKRoot,
+			AVDHome:       env.AVDHome,
+			GoldenDir:     env.GoldenDir,
+			ClonesDir:     env.ClonesDir,
+			ConfigTpl:     env.ConfigTemplate,
+			Emulator:      env.EmulatorBin,
+			ADB:           env.ADBBin,
+			AvdMgr:        env.AvdManagerBin,
+			SdkManager:    env.SdkManagerBin,
+			QemuImg:       env.QemuImgBin,
 			CorrelationID: env.CorrelationID,
+			Context:       ctx,
 		},
 	}
 }
 
 // Environment holds configuration for AVD tools and paths.
 type Environment struct {
-	SDKRoot         string // ANDROID_SDK_ROOT
-	AVDHome         string // ANDROID_AVD_HOME (default ~/.android/avd)
-	GoldenDir       string // Directory for golden QCOW2 images
-	ClonesDir       string // Directory for clones (optional)
-	ConfigTemplate  string // Path to config.ini template (optional)
-	EmulatorBin     string // Path to emulator binary (default: "emulator")
-	ADBBin          string // Path to adb binary (default: "adb")
-	AvdManagerBin   string // Path to avdmanager binary (default: "avdmanager")
-	SdkManagerBin   string // Path to sdkmanager binary (default: "sdkmanager")
-	QemuImgBin      string // Path to qemu-img binary (default: "qemu-img")
-	CorrelationID   string // Correlation ID for log enrichment
+	SDKRoot        string          // ANDROID_SDK_ROOT
+	AVDHome        string          // ANDROID_AVD_HOME (default ~/.android/avd)
+	GoldenDir      string          // Directory for golden QCOW2 images
+	ClonesDir      string          // Directory for clones (optional)
+	ConfigTemplate string          // Path to config.ini template (optional)
+	EmulatorBin    string          // Path to emulator binary (default: "emulator")
+	ADBBin         string          // Path to adb binary (default: "adb")
+	AvdManagerBin  string          // Path to avdmanager binary (default: "avdmanager")
+	SdkManagerBin  string          // Path to sdkmanager binary (default: "sdkmanager")
+	QemuImgBin     string          // Path to qemu-img binary (default: "qemu-img")
+	CorrelationID  string          // Correlation ID for log enrichment
+	Context        context.Context // Context for tracing
 }
 
 // AVDInfo contains information about an AVD.
@@ -85,9 +106,9 @@ type ProcessInfo struct {
 
 // InitBaseOptions contains options for creating a base AVD.
 type InitBaseOptions struct {
-	Name       string // AVD name (required)
+	Name        string // AVD name (required)
 	SystemImage string // System image ID (e.g., "system-images;android-35;google_apis_playstore;x86_64")
-	Device     string // Device profile (e.g., "pixel_6")
+	Device      string // Device profile (e.g., "pixel_6")
 }
 
 // CloneOptions contains options for creating a clone from a golden image.

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 )
 
 var avdLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -16,7 +17,7 @@ var avdLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 }))
 
 func logEvent(env Env, message string, fields ...any) {
-	baseFields := []any{}
+	baseFields := []any{"timestamp_ns", time.Now().UTC().UnixNano()}
 	if env.CorrelationID != "" {
 		baseFields = append(baseFields, "correlation_id", env.CorrelationID)
 	}
@@ -28,6 +29,7 @@ type lineLogWriter struct {
 	env    Env
 	fields []any
 	buffer []byte
+	msg    string
 }
 
 func (writer *lineLogWriter) Write(payload []byte) (int, error) {
@@ -40,15 +42,28 @@ func (writer *lineLogWriter) Write(payload []byte) (int, error) {
 		line := strings.TrimSpace(string(writer.buffer[:newlineIndex]))
 		writer.buffer = writer.buffer[newlineIndex+1:]
 		if line != "" {
-			logEvent(writer.env, "emulator stderr", append(writer.fields, "line", line)...)
+			logEvent(writer.env, writer.msg, append(writer.fields, "line", line)...)
 		}
 	}
 	return len(payload), nil
 }
 
-func newLineLogWriter(env Env, fields ...any) io.Writer {
+func newLineLogWriterWithMessage(env Env, message string, fields ...any) io.Writer {
 	return &lineLogWriter{
 		env:    env,
 		fields: fields,
+		msg:    message,
 	}
+}
+
+func newLineLogWriter(env Env, fields ...any) io.Writer {
+	return newLineLogWriterWithMessage(env, "emulator stderr", fields...)
+}
+
+func newCommandLogWriter(env Env, command string, args []string) io.Writer {
+	fields := []any{"command", command, "stream", "stderr"}
+	if len(args) > 0 {
+		fields = append(fields, "args", strings.Join(args, " "))
+	}
+	return newLineLogWriterWithMessage(env, "command stderr", fields...)
 }

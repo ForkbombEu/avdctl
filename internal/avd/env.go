@@ -20,6 +20,8 @@ type Env struct {
 	AvdMgr     string // avdmanager
 	SdkManager string // sdkmanager
 	QemuImg    string // qemu-img
+	// CorrelationID is used to tie logs to a specific workflow/activity.
+	CorrelationID string
 }
 
 func Detect() Env {
@@ -36,6 +38,10 @@ func Detect() Env {
 	gold := getenv("AVDCTL_GOLDEN_DIR", filepath.Join(home, "avd-golden"))
 	clns := getenv("AVDCTL_CLONES_DIR", filepath.Join(home, "avd-clones"))
 	tpl := os.Getenv("AVDCTL_CONFIG_TEMPLATE")
+	correlationID := getenv("AVDCTL_CORRELATION_ID", "")
+	if correlationID == "" {
+		correlationID = os.Getenv("CREDIMI_CORRELATION_ID")
+	}
 
 	return Env{
 		SDKRoot:    sdk,
@@ -48,6 +54,7 @@ func Detect() Env {
 		AvdMgr:     "avdmanager",
 		SdkManager: "sdkmanager",
 		QemuImg:    "qemu-img",
+		CorrelationID: correlationID,
 	}
 }
 

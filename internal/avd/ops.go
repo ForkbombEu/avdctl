@@ -150,6 +150,16 @@ func SaveGolden(env Env, name, dest string) (string, int64, error) {
 // It symlinks the base AVD's read-only files (system images, ROMs) and copies writable images.
 // Cloning takes time proportional to golden image size but ensures full isolation.
 func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
+	logEvent(
+		env,
+		"avd clone start",
+		"base",
+		base,
+		"clone",
+		name,
+		"golden_path",
+		golden,
+	)
 	baseDir := filepath.Join(env.AVDHome, base+".avd")
 	cloneDir := filepath.Join(env.AVDHome, name+".avd")
 
@@ -314,6 +324,18 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 		Userdata:  userdata,
 		SizeBytes: fi.Size(),
 	}
+	logEvent(
+		env,
+		"avd clone finished",
+		"clone",
+		name,
+		"path",
+		cloneDir,
+		"userdata",
+		userdata,
+		"size_bytes",
+		fi.Size(),
+	)
 	return info, nil
 }
 
@@ -416,6 +438,16 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 	errMsg += fmt.Sprintf("\nHint: Check if emulator is still running and adb can see it: adb devices")
 	errMsg += fmt.Sprintf("\nNote: The emulator may have booted successfully but ADB lost connection.")
 
+	logEvent(
+		env,
+		"wait for boot timeout",
+		"serial",
+		serial,
+		"timeout",
+		timeout.String(),
+		"adb_error",
+		strings.TrimSpace(lastError),
+	)
 	return fmt.Errorf("%s", errMsg)
 }
 
@@ -563,6 +595,7 @@ func ensureADB(env Env) { _ = exec.Command(env.ADB, "start-server").Run() }
 
 // StartEmulatorOnPort starts emulator with a fixed port and returns (*exec.Cmd, serial, logPath).
 func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*exec.Cmd, string, string, error) {
+	logEvent(env, "emulator start requested", "name", name, "port", port)
 	// emulator uses a pair: <port> and <port+1>; must be even
 	if port%2 != 0 {
 		return nil, "", "", fmt.Errorf("port %d is odd; emulator requires even port numbers (uses port and port+1)", port)
@@ -589,6 +622,15 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 	if err != nil {
 		return nil, "", "", fmt.Errorf("open log: %w", err)
 	}
+	logWriter := newLineLogWriter(
+		env,
+		"name",
+		name,
+		"port",
+		port,
+		"log_path",
+		logPath,
+	)
 
 	args := []string{
 		"-avd", name,
@@ -609,15 +651,41 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 
 	args = append(args, extraArgs...)
 	cmd := exec.Command(env.Emulator, args...)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
+	cmd.Stdout = io.MultiWriter(logFile, logWriter)
+	cmd.Stderr = io.MultiWriter(logFile, logWriter)
 	cmd.Env = append(os.Environ(), "QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null")
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
+		logEvent(
+			env,
+			"emulator start failed",
+			"name",
+			name,
+			"port",
+			port,
+			"error",
+			err,
+			"log_path",
+			logPath,
+		)
 		return nil, "", "", fmt.Errorf("emulator start: %w", err)
 	}
 	serial := fmt.Sprintf("emulator-%d", port)
+	logEvent(
+		env,
+		"emulator started",
+		"name",
+		name,
+		"port",
+		port,
+		"serial",
+		serial,
+		"pid",
+		cmd.Process.Pid,
+		"log_path",
+		logPath,
+	)
 	return cmd, serial, logPath, nil
 }
 
@@ -939,6 +1007,7 @@ func StopBySerial(env Env, serial string) error {
 	if n, err := strconv.Atoi(strings.TrimPrefix(serial, "emulator-")); err == nil {
 		port = n
 	}
+	logEvent(env, "emulator stop requested", "serial", serial, "port", port)
 
 	// Try graceful shutdown via adb first
 	cmd := exec.Command(env.ADB, "-s", serial, "emu", "kill")
@@ -953,6 +1022,7 @@ func StopBySerial(env Env, serial string) error {
 	pid := findEmulatorPID(port)
 	if pid == 0 {
 		// Successfully stopped
+		logEvent(env, "emulator stopped", "serial", serial, "port", port)
 		return nil
 	}
 
@@ -966,12 +1036,14 @@ func StopBySerial(env Env, serial string) error {
 				// Force kill
 				_ = proc.Kill()
 			}
+			logEvent(env, "emulator stopped", "serial", serial, "port", port, "pid", pid)
 			return nil
 		}
 	}
 
 	// If we got here, adb failed and we couldn't kill the process
 	if adbErr != nil {
+		logEvent(env, "emulator stop failed", "serial", serial, "port", port, "pid", pid, "error", adbErr)
 		return fmt.Errorf("failed to stop %s via adb: %w\nADB error: %s\nAlso failed to kill PID %d",
 			serial, adbErr, errBuf.String(), pid)
 	}

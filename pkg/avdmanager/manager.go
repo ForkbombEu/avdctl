@@ -23,6 +23,15 @@ func New() *Manager {
 	}
 }
 
+// NewWithCorrelationID creates a new AVD Manager with a correlation ID for structured logs.
+func NewWithCorrelationID(correlationID string) *Manager {
+	env := avd.Detect()
+	env.CorrelationID = correlationID
+	return &Manager{
+		env: env,
+	}
+}
+
 // NewWithEnv creates a new AVD Manager with custom environment configuration.
 func NewWithEnv(env Environment) *Manager {
 	return &Manager{
@@ -37,6 +46,7 @@ func NewWithEnv(env Environment) *Manager {
 			AvdMgr:     env.AvdManagerBin,
 			SdkManager: env.SdkManagerBin,
 			QemuImg:    env.QemuImgBin,
+			CorrelationID: env.CorrelationID,
 		},
 	}
 }
@@ -53,6 +63,7 @@ type Environment struct {
 	AvdManagerBin   string // Path to avdmanager binary (default: "avdmanager")
 	SdkManagerBin   string // Path to sdkmanager binary (default: "sdkmanager")
 	QemuImgBin      string // Path to qemu-img binary (default: "qemu-img")
+	CorrelationID   string // Correlation ID for log enrichment
 }
 
 // AVDInfo contains information about an AVD.

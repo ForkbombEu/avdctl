@@ -19,8 +19,18 @@ import (
 )
 
 func main() {
-	if _, err := avdmanager.SetupTracing(context.Background()); err != nil {
+	shutdownTracing, err := avdmanager.SetupTracing(context.Background())
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to initialize tracing: %v\n", err)
+	}
+	if shutdownTracing != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := shutdownTracing(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "failed to shutdown tracing: %v\n", err)
+			}
+		}()
 	}
 	env := core.Detect()
 

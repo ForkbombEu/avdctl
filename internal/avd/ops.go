@@ -61,6 +61,17 @@ func run(env Env, bin string, args ...string) error {
 	return nil
 }
 
+func runWithContext(ctx context.Context, env Env, bin string, args ...string) error {
+	cmd := exec.CommandContext(ctx, bin, args...)
+	var buf bytes.Buffer
+	cmd.Stdout = &buf
+	attachCommandStderr(env, cmd, &buf)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %v failed: %v\n%s", bin, args, err, buf.String())
+	}
+	return nil
+}
+
 func List(env Env) ([]Info, error) {
 	_, span := startSpan(env, "avd.List")
 	defer span.End()
@@ -575,8 +586,17 @@ func WaitForBootWithProgress(
 
 	reportProgress("waiting_adb")
 	waitErrCh := make(chan error, 1)
+	waitForDeviceTimeout := timeout
+	minWaitForDeviceTimeout := 2 * time.Minute
+	if waitForDeviceTimeout <= 0 {
+		waitForDeviceTimeout = minWaitForDeviceTimeout
+	} else if waitForDeviceTimeout < minWaitForDeviceTimeout {
+		waitForDeviceTimeout = minWaitForDeviceTimeout
+	}
+	waitCtx, waitCancel := context.WithTimeout(ctx, waitForDeviceTimeout)
+	defer waitCancel()
 	go func() {
-		waitErrCh <- run(env, env.ADB, "wait-for-device")
+		waitErrCh <- runWithContext(waitCtx, env, env.ADB, "wait-for-device")
 	}()
 
 	nextProgress := time.Now().Add(5 * time.Second)

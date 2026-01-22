@@ -131,6 +131,9 @@ type Environment struct {
 	Context        context.Context // Context for tracing
 }
 
+// BootProgressFunc reports boot progress updates.
+type BootProgressFunc func(status string, elapsed time.Duration)
+
 // AVDInfo contains information about an AVD.
 type AVDInfo struct {
 	Name      string // AVD name
@@ -360,12 +363,31 @@ func (m *Manager) BakeAPK(opts BakeAPKOptions) (clonePath string, cloneSize int6
 
 // WaitForBoot waits for an emulator to fully boot Android.
 func (m *Manager) WaitForBoot(serial string, timeout time.Duration) error {
+	return m.WaitForBootWithProgress(serial, timeout, nil)
+}
+
+// WaitForBootWithProgress waits for an emulator to fully boot Android and reports progress.
+func (m *Manager) WaitForBootWithProgress(
+	serial string,
+	timeout time.Duration,
+	progress BootProgressFunc,
+) error {
 	ctx, span := m.startSpan(
 		"avdmanager.WaitForBoot",
 		attribute.String("serial", serial),
 	)
 	defer span.End()
-	err := avd.WaitForBoot(m.withContext(ctx), serial, timeout)
+	err := avd.WaitForBootWithProgress(
+		m.withContext(ctx),
+		serial,
+		timeout,
+		func(status string, elapsed time.Duration) {
+			if progress == nil {
+				return
+			}
+			progress(status, elapsed)
+		},
+	)
 	recordSpanError(span, err)
 	return err
 }

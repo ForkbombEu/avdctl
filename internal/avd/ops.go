@@ -5,6 +5,7 @@ package avd
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +27,9 @@ type Info struct {
 	Userdata  string `json:"userdata"`
 	SizeBytes int64  `json:"size_bytes"`
 }
+
+// BootProgressFunc is called to report boot progress status.
+type BootProgressFunc func(status string, elapsed time.Duration)
 
 func attachCommandStderr(env Env, cmd *exec.Cmd, buf *bytes.Buffer) {
 	args := []string{}
@@ -451,6 +455,15 @@ func GuessEmulatorSerial(env Env) (string, error) {
 }
 
 func WaitForBoot(env Env, serial string, timeout time.Duration) error {
+	return WaitForBootWithProgress(env, serial, timeout, nil)
+}
+
+func WaitForBootWithProgress(
+	env Env,
+	serial string,
+	timeout time.Duration,
+	progress BootProgressFunc,
+) error {
 	_, span := startSpan(
 		env,
 		"avd.WaitForBoot",
@@ -458,13 +471,66 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 		attribute.String("timeout", timeout.String()),
 	)
 	defer span.End()
+
+	ctx := env.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
 	start := time.Now()
+	deadline := start.Add(timeout)
 	logEvent(env, "emulator boot wait started", "serial", serial, "timeout", timeout.String())
-	deadline := time.Now().Add(timeout)
-	_ = run(env, env.ADB, "wait-for-device")
+
+	reportProgress := func(status string) {
+		if progress == nil {
+			return
+		}
+		progress(status, time.Since(start))
+	}
+
+	reportProgress("waiting_adb")
+	waitErrCh := make(chan error, 1)
+	go func() {
+		waitErrCh <- run(env, env.ADB, "wait-for-device")
+	}()
+
+	nextProgress := time.Now().Add(5 * time.Second)
+	for {
+		select {
+		case err := <-waitErrCh:
+			if err != nil {
+				recordSpanError(span, err)
+				return err
+			}
+			goto checkBoot
+		default:
+		}
+
+		if ctx.Err() != nil {
+			recordSpanError(span, ctx.Err())
+			return ctx.Err()
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		if time.Now().After(nextProgress) {
+			reportProgress("waiting_adb")
+			nextProgress = time.Now().Add(5 * time.Second)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+
+checkBoot:
+	reportProgress("checking_bootanim")
+	nextProgress = time.Now().Add(5 * time.Second)
 
 	lastError := ""
 	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			recordSpanError(span, ctx.Err())
+			return ctx.Err()
+		}
+
 		var out bytes.Buffer
 		var errOut bytes.Buffer
 		cmd := exec.Command(env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
@@ -476,6 +542,7 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 		if bootCompleted == "1" {
 			time.Sleep(2 * time.Second)
 			span.SetAttributes(attribute.Bool("boot_completed", true))
+			reportProgress("boot_complete")
 			logEvent(
 				env,
 				"emulator boot completed",
@@ -487,7 +554,6 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 			return nil
 		}
 
-		// Track last error for better diagnostics
 		if err != nil {
 			lastError = errOut.String()
 			if lastError == "" {
@@ -495,10 +561,14 @@ func WaitForBoot(env Env, serial string, timeout time.Duration) error {
 			}
 		}
 
+		if time.Now().After(nextProgress) {
+			reportProgress("checking_bootanim")
+			nextProgress = time.Now().Add(5 * time.Second)
+		}
+
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// Provide helpful error message
 	errMsg := fmt.Sprintf("boot timeout after %s (adb could not confirm boot completion)", timeout)
 	if lastError != "" {
 		errMsg += fmt.Sprintf("\nLast ADB error: %s", strings.TrimSpace(lastError))

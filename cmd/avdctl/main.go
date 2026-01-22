@@ -4,6 +4,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +15,13 @@ import (
 	"github.com/spf13/cobra"
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
+	"github.com/forkbombeu/avdctl/pkg/avdmanager"
 )
 
 func main() {
+	if _, err := avdmanager.SetupTracing(context.Background()); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize tracing: %v\n", err)
+	}
 	env := core.Detect()
 
 	root := &cobra.Command{

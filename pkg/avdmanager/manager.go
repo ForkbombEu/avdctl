@@ -10,12 +10,17 @@ import (
 	"time"
 
 	"github.com/forkbombeu/avdctl/internal/avd"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Manager provides high-level AVD management operations.
 type Manager struct {
 	env avd.Env
 }
+
+var managerTracer = otel.Tracer("avdctl/manager")
 
 // New creates a new AVD Manager with auto-detected environment.
 func New() *Manager {
@@ -69,6 +74,45 @@ func NewWithEnv(env Environment) *Manager {
 			Context:       ctx,
 		},
 	}
+}
+
+// Context returns the context bound to this manager.
+func (m *Manager) Context() context.Context {
+	return m.env.Context
+}
+
+// CorrelationID returns the correlation ID configured on this manager.
+func (m *Manager) CorrelationID() string {
+	return m.env.CorrelationID
+}
+
+func (m *Manager) spanContext() context.Context {
+	if m.env.Context != nil {
+		return m.env.Context
+	}
+	return context.Background()
+}
+
+func (m *Manager) startSpan(name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	if m.env.CorrelationID != "" {
+		attrs = append(attrs, attribute.String("correlation_id", m.env.CorrelationID))
+	}
+	return managerTracer.Start(m.spanContext(), name, trace.WithAttributes(attrs...))
+}
+
+func (m *Manager) withContext(ctx context.Context) avd.Env {
+	env := m.env
+	if ctx != nil {
+		env.Context = ctx
+	}
+	return env
+}
+
+func recordSpanError(span trace.Span, err error) {
+	if err == nil {
+		return
+	}
+	span.RecordError(err)
 }
 
 // Environment holds configuration for AVD tools and paths.
@@ -164,7 +208,13 @@ func (m *Manager) InitBase(opts InitBaseOptions) (AVDInfo, error) {
 
 // Clone creates a lightweight clone backed by a golden QCOW2 image.
 func (m *Manager) Clone(opts CloneOptions) (AVDInfo, error) {
-	info, err := avd.CloneFromGolden(m.env, opts.BaseName, opts.CloneName, opts.GoldenPath)
+	ctx, span := m.startSpan(
+		"avdmanager.Clone",
+		attribute.String("avd_name", opts.CloneName),
+	)
+	defer span.End()
+	info, err := avd.CloneFromGolden(m.withContext(ctx), opts.BaseName, opts.CloneName, opts.GoldenPath)
+	recordSpanError(span, err)
 	if err != nil {
 		return AVDInfo{}, err
 	}
@@ -178,16 +228,40 @@ func (m *Manager) Clone(opts CloneOptions) (AVDInfo, error) {
 
 // Run starts an emulator instance headless and returns the serial.
 func (m *Manager) Run(opts RunOptions) (string, error) {
-	return avd.RunAVD(m.env, opts.Name)
+	ctx, span := m.startSpan(
+		"avdmanager.Run",
+		attribute.String("avd_name", opts.Name),
+	)
+	defer span.End()
+	serial, err := avd.RunAVD(m.withContext(ctx), opts.Name)
+	recordSpanError(span, err)
+	if err == nil {
+		span.SetAttributes(attribute.String("serial", serial))
+	}
+	return serial, err
 }
 
 // RunOnPort starts an emulator instance on a specific port.
 func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err error) {
+	ctx, span := m.startSpan(
+		"avdmanager.RunOnPort",
+		attribute.String("avd_name", opts.Name),
+		attribute.Int("port", opts.Port),
+	)
+	defer span.End()
 	if opts.Port == 0 {
-		serial, err := avd.RunAVD(m.env, opts.Name)
+		serial, err = avd.RunAVD(m.withContext(ctx), opts.Name)
+		recordSpanError(span, err)
+		if err == nil {
+			span.SetAttributes(attribute.String("serial", serial))
+		}
 		return serial, "", err
 	}
-	_, serial, logPath, err = avd.StartEmulatorOnPort(m.env, opts.Name, opts.Port)
+	_, serial, logPath, err = avd.StartEmulatorOnPort(m.withContext(ctx), opts.Name, opts.Port)
+	recordSpanError(span, err)
+	if err == nil {
+		span.SetAttributes(attribute.String("serial", serial))
+	}
 	return serial, logPath, err
 }
 
@@ -230,7 +304,14 @@ func (m *Manager) ListRunning() ([]ProcessInfo, error) {
 
 // Stop stops a running emulator by serial (e.g., "emulator-5580").
 func (m *Manager) Stop(serial string) error {
-	return avd.StopBySerial(m.env, serial)
+	ctx, span := m.startSpan(
+		"avdmanager.Stop",
+		attribute.String("serial", serial),
+	)
+	defer span.End()
+	err := avd.StopBySerial(m.withContext(ctx), serial)
+	recordSpanError(span, err)
+	return err
 }
 
 // StopByName stops a running emulator by AVD name.
@@ -241,7 +322,7 @@ func (m *Manager) StopByName(name string) error {
 	}
 	for _, p := range procs {
 		if p.Name == name {
-			return avd.StopBySerial(m.env, p.Serial)
+			return m.Stop(p.Serial)
 		}
 	}
 	return nil // Not running
@@ -279,7 +360,14 @@ func (m *Manager) BakeAPK(opts BakeAPKOptions) (clonePath string, cloneSize int6
 
 // WaitForBoot waits for an emulator to fully boot Android.
 func (m *Manager) WaitForBoot(serial string, timeout time.Duration) error {
-	return avd.WaitForBoot(m.env, serial, timeout)
+	ctx, span := m.startSpan(
+		"avdmanager.WaitForBoot",
+		attribute.String("serial", serial),
+	)
+	defer span.End()
+	err := avd.WaitForBoot(m.withContext(ctx), serial, timeout)
+	recordSpanError(span, err)
+	return err
 }
 
 // FindFreePort finds a free even port pair for emulator (uses port and port+1).

@@ -43,6 +43,10 @@ func setupTracing(ctx context.Context) (func(context.Context) error, error) {
 	if err != nil {
 		return nil, err
 	}
+	if exporter == nil {
+		otel.SetTextMapPropagator(propagation.TraceContext{})
+		return func(context.Context) error { return nil }, nil
+	}
 
 	res := resource.NewWithAttributes("", attribute.String("service.name", serviceName))
 	processor := sdktrace.NewSimpleSpanProcessor(exporter)
@@ -105,7 +109,7 @@ func (e *stdoutTraceExporter) Shutdown(_ context.Context) error {
 func newTraceExporter(ctx context.Context) (sdktrace.SpanExporter, bool, error) {
 	endpoint := strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"))
 	if endpoint == "" {
-		return newStdoutTraceExporter(os.Stdout), false, nil
+		return nil, false, nil
 	}
 
 	opts := []otlptracehttp.Option{}

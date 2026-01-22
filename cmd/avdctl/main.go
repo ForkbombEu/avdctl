@@ -319,11 +319,55 @@ func main() {
 
 	// status
 	var stName, stSerial string
+	var stAll bool
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show status for a running emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env := core.Detect()
+			if stAll {
+				all, err := core.List(env)
+				if err != nil {
+					return err
+				}
+				running, err := core.ListRunning(env)
+				if err != nil {
+					return err
+				}
+				runningByName := make(map[string]core.ProcInfo, len(running))
+				for _, proc := range running {
+					if proc.Name != "" {
+						runningByName[proc.Name] = proc
+					}
+				}
+				if len(all) == 0 {
+					fmt.Println("(no avds)")
+					return nil
+				}
+				for _, info := range all {
+					proc, ok := runningByName[info.Name]
+					state := "stopped"
+					serial := "-"
+					port := "-"
+					pid := "-"
+					if ok {
+						state = "booting"
+						if proc.Booted {
+							state = "ready"
+						}
+						serial = proc.Serial
+						port = fmt.Sprintf("%d", proc.Port)
+						pid = fmt.Sprintf("%d", proc.PID)
+					}
+					fmt.Printf("%-18s %-14s port=%-5s pid=%-7s %s\n", info.Name, serial, port, pid, state)
+				}
+				return nil
+			}
+
+			if stName == "" && stSerial == "" {
+				return fmt.Errorf("use --name, --serial, or --all")
+			}
+
 			procs, err := core.ListRunning(env)
 			if err != nil {
 				return err
@@ -345,6 +389,7 @@ func main() {
 	}
 	statusCmd.Flags().StringVar(&stName, "name", "", "AVD name")
 	statusCmd.Flags().StringVar(&stSerial, "serial", "", "emulator serial (e.g., emulator-5582)")
+	statusCmd.Flags().BoolVar(&stAll, "all", false, "list all AVDs with running state")
 	root.AddCommand(statusCmd)
 
 	// stop
@@ -383,6 +428,45 @@ func main() {
 	stopCmd.Flags().StringVar(&stopName, "name", "", "AVD name")
 	stopCmd.Flags().StringVar(&stopSerial, "serial", "", "emulator serial (e.g., emulator-5582)")
 	root.AddCommand(stopCmd)
+
+	// cleanup
+	var cleanupForce bool
+	var cleanupDryRun bool
+	cleanupCmd := &cobra.Command{
+		Use:   "cleanup",
+		Short: "Detect and optionally clean orphaned emulators and clones",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dryRun := !cleanupForce
+			if cleanupDryRun {
+				dryRun = true
+			}
+			report, err := core.CleanupOrphans(env, !dryRun)
+			if err != nil {
+				return err
+			}
+			if len(report.OrphanedProcesses) == 0 && len(report.OrphanedAVDs) == 0 {
+				fmt.Println("No orphans found.")
+				return nil
+			}
+			if dryRun {
+				fmt.Printf("Orphans detected (%d processes, %d AVDs). Use --force to clean.\n",
+					len(report.OrphanedProcesses), len(report.OrphanedAVDs))
+			} else {
+				fmt.Printf("Orphans cleaned (%d processes, %d AVDs).\n",
+					len(report.OrphanedProcesses), len(report.OrphanedAVDs))
+			}
+			for _, proc := range report.OrphanedProcesses {
+				fmt.Printf("process: serial=%s name=%s port=%d pid=%d\n", proc.Serial, proc.Name, proc.Port, proc.PID)
+			}
+			for _, info := range report.OrphanedAVDs {
+				fmt.Printf("avd: name=%s path=%s\n", info.Name, info.Path)
+			}
+			return nil
+		},
+	}
+	cleanupCmd.Flags().BoolVar(&cleanupForce, "force", false, "delete orphans")
+	cleanupCmd.Flags().BoolVar(&cleanupDryRun, "dry-run", false, "show what would be cleaned")
+	root.AddCommand(cleanupCmd)
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

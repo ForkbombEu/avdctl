@@ -6,6 +6,8 @@ package avd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +16,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -27,6 +31,8 @@ type Info struct {
 	Userdata  string `json:"userdata"`
 	SizeBytes int64  `json:"size_bytes"`
 }
+
+const cloneFingerprintFilename = ".golden.fingerprint"
 
 // BootProgressFunc is called to report boot progress status.
 type BootProgressFunc func(status string, elapsed time.Duration)
@@ -196,10 +202,6 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 		recordSpanError(span, err)
 		return Info{}, fmt.Errorf("base AVD not found: %w", err)
 	}
-	if err := os.MkdirAll(cloneDir, 0o755); err != nil {
-		recordSpanError(span, err)
-		return Info{}, err
-	}
 
 	// Resolve golden path (can be directory or legacy .qcow2 file)
 	goldenDir := golden
@@ -210,6 +212,24 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	if err != nil {
 		recordSpanError(span, err)
 		return Info{}, fmt.Errorf("resolve golden path: %w", err)
+	}
+	fingerprint, err := goldenFingerprint(absGoldenDir)
+	if err != nil {
+		recordSpanError(span, err)
+		return Info{}, fmt.Errorf("fingerprint golden: %w", err)
+	}
+	if matches, err := cloneMatchesFingerprint(cloneDir, fingerprint); err != nil {
+		recordSpanError(span, err)
+		return Info{}, err
+	} else if matches {
+		return infoOf(env, name)
+	}
+	if _, err := os.Stat(filepath.Join(env.AVDHome, name+".ini")); err == nil {
+		return Info{}, fmt.Errorf("clone name conflict: %s already exists", name)
+	}
+	if err := os.Mkdir(cloneDir, 0o755); err != nil {
+		recordSpanError(span, err)
+		return Info{}, err
 	}
 
 	// ---------------------------------------------------------------------
@@ -344,6 +364,9 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	if err := os.WriteFile(ini, []byte(body), 0o644); err != nil {
 		return Info{}, err
 	}
+	if err := writeCloneFingerprint(cloneDir, fingerprint); err != nil {
+		return Info{}, err
+	}
 
 	// ---------------------------------------------------------------------
 	// 6. Report size & info
@@ -399,6 +422,68 @@ func sanitizeConfigINI(b []byte) []byte {
 	out = append(out, "fastboot.forceColdBoot=yes")
 	out = append(out, "userdata.useQcow2=yes")
 	return []byte(strings.Join(out, "\n"))
+}
+
+func goldenFingerprint(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+
+	hasher := sha256.New()
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return "", err
+		}
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name() < entries[j].Name()
+		})
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			st, err := entry.Info()
+			if err != nil {
+				return "", err
+			}
+			fmt.Fprintf(hasher, "%s:%d:%d;", entry.Name(), st.Size(), st.ModTime().UnixNano())
+		}
+	} else {
+		fmt.Fprintf(hasher, "%s:%d:%d", filepath.Base(path), info.Size(), info.ModTime().UnixNano())
+	}
+
+	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func cloneMatchesFingerprint(cloneDir, fingerprint string) (bool, error) {
+	stat, err := os.Stat(cloneDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !stat.IsDir() {
+		return false, fmt.Errorf("clone name conflict: %s is not a directory", cloneDir)
+	}
+	data, err := os.ReadFile(filepath.Join(cloneDir, cloneFingerprintFilename))
+	if err != nil {
+		return false, fmt.Errorf("clone name conflict: fingerprint missing")
+	}
+	if strings.TrimSpace(string(data)) == fingerprint {
+		return true, nil
+	}
+	return false, fmt.Errorf("clone name conflict: golden image mismatch")
+}
+
+func writeCloneFingerprint(cloneDir, fingerprint string) error {
+	return os.WriteFile(filepath.Join(cloneDir, cloneFingerprintFilename), []byte(fingerprint), 0o644)
+}
+
+func isCloneDir(path string) bool {
+	_, err := os.Stat(filepath.Join(path, cloneFingerprintFilename))
+	return err == nil
 }
 
 func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error) {
@@ -720,8 +805,31 @@ func Delete(env Env, name string) error {
 	if name == "" {
 		return errors.New("empty name")
 	}
-	_ = os.RemoveAll(filepath.Join(env.AVDHome, name+".avd"))
-	_ = os.Remove(filepath.Join(env.AVDHome, name+".ini"))
+	avdDir := filepath.Join(env.AVDHome, name+".avd")
+	ini := filepath.Join(env.AVDHome, name+".ini")
+
+	if _, err := os.Stat(avdDir); err != nil {
+		if os.IsNotExist(err) {
+			if _, iniErr := os.Stat(ini); os.IsNotExist(iniErr) {
+				return nil
+			}
+		} else {
+			return err
+		}
+	}
+
+	procs, err := ListRunning(env)
+	if err != nil {
+		return err
+	}
+	for _, proc := range procs {
+		if proc.Name == name {
+			return fmt.Errorf("cannot delete running AVD %s; stop it first", name)
+		}
+	}
+
+	_ = os.RemoveAll(avdDir)
+	_ = os.Remove(ini)
 	return nil
 }
 
@@ -950,6 +1058,11 @@ type ProcInfo struct {
 	Booted bool   `json:"booted"`
 }
 
+type CleanupReport struct {
+	OrphanedProcesses []ProcInfo `json:"orphaned_processes"`
+	OrphanedAVDs      []Info     `json:"orphaned_avds"`
+}
+
 func ListRunning(env Env) ([]ProcInfo, error) {
 	_, span := startSpan(env, "avd.ListRunning")
 	defer span.End()
@@ -981,6 +1094,9 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 			// Try to get name from adb, fallback to process cmdline
 			name, _ := GetAVDNameFromSerial(env, serial)
 			pid := findEmulatorPID(port)
+			if pid > 0 && isZombieProcess(pid) {
+				continue
+			}
 			if name == "" && pid > 0 {
 				name = findEmulatorNameFromPID(pid)
 			}
@@ -1008,6 +1124,9 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 		}
 		pid := findEmulatorPID(port)
 		if pid > 0 {
+			if isZombieProcess(pid) {
+				continue
+			}
 			// Found a running emulator on this port
 			serial := fmt.Sprintf("emulator-%d", port)
 			// Try to get name from adb, fallback to process cmdline
@@ -1032,6 +1151,86 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 	}
 
 	return procs, nil
+}
+
+func CleanupOrphans(env Env, force bool) (CleanupReport, error) {
+	_, span := startSpan(
+		env,
+		"avd.CleanupOrphans",
+		attribute.Bool("force", force),
+	)
+	defer span.End()
+
+	report := CleanupReport{}
+	avds, err := List(env)
+	if err != nil {
+		recordSpanError(span, err)
+		return report, err
+	}
+	procs, err := ListRunning(env)
+	if err != nil {
+		recordSpanError(span, err)
+		return report, err
+	}
+
+	avdByName := make(map[string]Info, len(avds))
+	for _, info := range avds {
+		avdByName[info.Name] = info
+	}
+	runningByName := make(map[string]ProcInfo, len(procs))
+	for _, proc := range procs {
+		if proc.Name != "" {
+			runningByName[proc.Name] = proc
+		}
+	}
+
+	for _, proc := range procs {
+		if proc.Name == "" {
+			report.OrphanedProcesses = append(report.OrphanedProcesses, proc)
+			continue
+		}
+		if _, ok := avdByName[proc.Name]; !ok {
+			report.OrphanedProcesses = append(report.OrphanedProcesses, proc)
+		}
+	}
+
+	for _, info := range avds {
+		if !isCloneDir(info.Path) {
+			continue
+		}
+		if _, ok := runningByName[info.Name]; ok {
+			continue
+		}
+		report.OrphanedAVDs = append(report.OrphanedAVDs, info)
+	}
+
+	if force {
+		for _, proc := range report.OrphanedProcesses {
+			if err := StopBySerial(env, proc.Serial); err != nil {
+				logEvent(env, "orphan process stop failed", "serial", proc.Serial, "error", err)
+			}
+		}
+		for _, info := range report.OrphanedAVDs {
+			if err := Delete(env, info.Name); err != nil {
+				logEvent(env, "orphan avd delete failed", "name", info.Name, "error", err)
+			}
+		}
+	}
+
+	if len(report.OrphanedProcesses) > 0 || len(report.OrphanedAVDs) > 0 {
+		logEvent(
+			env,
+			"orphan cleanup scan completed",
+			"orphaned_processes",
+			len(report.OrphanedProcesses),
+			"orphaned_avds",
+			len(report.OrphanedAVDs),
+			"force",
+			force,
+		)
+	}
+
+	return report, nil
 }
 
 // findEmulatorPID best-effort: parse `ps` for qemu-system or emulator on the given port.
@@ -1060,6 +1259,23 @@ func findEmulatorPID(port int) int {
 		}
 	}
 	return 0
+}
+
+func isZombieProcess(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	statusPath := filepath.Join("/proc", strconv.Itoa(pid), "status")
+	data, err := os.ReadFile(statusPath)
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "State:") {
+			return strings.Contains(line, "Z")
+		}
+	}
+	return false
 }
 
 // findEmulatorNameFromPID extracts AVD name from process cmdline
@@ -1218,6 +1434,24 @@ func StopBySerial(env Env, serial string) error {
 	defer span.End()
 	logEvent(env, "emulator stop requested", "serial", serial, "port", port)
 
+	pid := findEmulatorPID(port)
+	if pid == 0 {
+		span.SetAttributes(attribute.Bool("stopped", true))
+		logEvent(env, "emulator already stopped", "serial", serial, "port", port)
+		return nil
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		span.SetAttributes(attribute.Bool("stopped", true))
+		logEvent(env, "emulator already stopped", "serial", serial, "port", port)
+		return nil
+	}
+	if err := proc.Signal(syscall.Signal(0)); err != nil {
+		span.SetAttributes(attribute.Bool("stopped", true))
+		logEvent(env, "emulator already stopped", "serial", serial, "port", port)
+		return nil
+	}
+
 	// Try graceful shutdown via adb first
 	cmd := exec.Command(env.ADB, "-s", serial, "emu", "kill")
 	var errBuf bytes.Buffer
@@ -1228,7 +1462,7 @@ func StopBySerial(env Env, serial string) error {
 	time.Sleep(1 * time.Second)
 
 	// Check if process is still running
-	pid := findEmulatorPID(port)
+	pid = findEmulatorPID(port)
 	if pid == 0 {
 		// Successfully stopped
 		span.SetAttributes(attribute.Bool("stopped", true))
@@ -1237,19 +1471,20 @@ func StopBySerial(env Env, serial string) error {
 	}
 
 	// ADB kill failed or didn't work, fallback to SIGTERM
-	if proc, err := os.FindProcess(pid); err == nil {
-		if killErr := proc.Signal(os.Interrupt); killErr == nil {
-			// Wait a bit for graceful shutdown
-			time.Sleep(2 * time.Second)
-			// Check if still running
-			if findEmulatorPID(port) > 0 {
-				// Force kill
-				_ = proc.Kill()
+	if killErr := proc.Signal(syscall.SIGTERM); killErr == nil {
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			if findEmulatorPID(port) == 0 {
+				span.SetAttributes(attribute.Bool("stopped", true))
+				logEvent(env, "emulator stopped", "serial", serial, "port", port, "pid", pid)
+				return nil
 			}
-			span.SetAttributes(attribute.Bool("stopped", true))
-			logEvent(env, "emulator stopped", "serial", serial, "port", port, "pid", pid)
-			return nil
+			time.Sleep(500 * time.Millisecond)
 		}
+		_ = proc.Kill()
+		span.SetAttributes(attribute.Bool("stopped", true))
+		logEvent(env, "emulator stopped", "serial", serial, "port", port, "pid", pid)
+		return nil
 	}
 
 	// If we got here, adb failed and we couldn't kill the process

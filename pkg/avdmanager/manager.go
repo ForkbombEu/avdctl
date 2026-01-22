@@ -7,6 +7,8 @@ package avdmanager
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/forkbombeu/avdctl/internal/avd"
@@ -106,6 +108,22 @@ func (m *Manager) withContext(ctx context.Context) avd.Env {
 		env.Context = ctx
 	}
 	return env
+}
+
+func (m *Manager) ensureNotRunning(name string) error {
+	if name == "" {
+		return errors.New("empty AVD name")
+	}
+	procs, err := m.ListRunning()
+	if err != nil {
+		return err
+	}
+	for _, proc := range procs {
+		if proc.Name == name {
+			return fmt.Errorf("AVD %s already running on %s", name, proc.Serial)
+		}
+	}
+	return nil
 }
 
 func recordSpanError(span trace.Span, err error) {
@@ -236,6 +254,10 @@ func (m *Manager) Run(opts RunOptions) (string, error) {
 		attribute.String("avd_name", opts.Name),
 	)
 	defer span.End()
+	if err := m.ensureNotRunning(opts.Name); err != nil {
+		recordSpanError(span, err)
+		return "", err
+	}
 	serial, err := avd.RunAVD(m.withContext(ctx), opts.Name)
 	recordSpanError(span, err)
 	if err == nil {
@@ -253,6 +275,10 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 	)
 	defer span.End()
 	if opts.Port == 0 {
+		if err := m.ensureNotRunning(opts.Name); err != nil {
+			recordSpanError(span, err)
+			return "", "", err
+		}
 		serial, err = avd.RunAVD(m.withContext(ctx), opts.Name)
 		recordSpanError(span, err)
 		if err == nil {
@@ -260,7 +286,30 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 		}
 		return serial, "", err
 	}
-	_, serial, logPath, err = avd.StartEmulatorOnPort(m.withContext(ctx), opts.Name, opts.Port)
+	if err := m.ensureNotRunning(opts.Name); err != nil {
+		recordSpanError(span, err)
+		return "", "", err
+	}
+
+	port := opts.Port
+	procs, err := m.ListRunning()
+	if err != nil {
+		recordSpanError(span, err)
+		return "", "", err
+	}
+	for _, proc := range procs {
+		if proc.Port == port {
+			freePort, err := m.FindFreePort(5554, 5800)
+			if err != nil {
+				recordSpanError(span, err)
+				return "", "", err
+			}
+			port = freePort
+			break
+		}
+	}
+
+	_, serial, logPath, err = avd.StartEmulatorOnPort(m.withContext(ctx), opts.Name, port)
 	recordSpanError(span, err)
 	if err == nil {
 		span.SetAttributes(attribute.String("serial", serial))

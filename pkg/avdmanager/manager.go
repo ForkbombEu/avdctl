@@ -6,15 +6,23 @@
 package avdmanager
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/forkbombeu/avdctl/internal/avd"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // Manager provides high-level AVD management operations.
 type Manager struct {
 	env avd.Env
 }
+
+var managerTracer = otel.Tracer("avdctl/manager")
 
 // New creates a new AVD Manager with auto-detected environment.
 func New() *Manager {
@@ -23,37 +31,126 @@ func New() *Manager {
 	}
 }
 
+// NewWithCorrelationID creates a new AVD Manager with a correlation ID for structured logs.
+func NewWithCorrelationID(correlationID string) *Manager {
+	return NewWithContextAndCorrelationID(context.Background(), correlationID)
+}
+
+// NewWithContext creates a new AVD Manager with a custom context for tracing.
+func NewWithContext(ctx context.Context) *Manager {
+	return NewWithContextAndCorrelationID(ctx, "")
+}
+
+// NewWithContextAndCorrelationID creates a new AVD Manager with a custom context and correlation ID.
+func NewWithContextAndCorrelationID(ctx context.Context, correlationID string) *Manager {
+	env := avd.Detect()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	env.Context = ctx
+	env.CorrelationID = correlationID
+	return &Manager{
+		env: env,
+	}
+}
+
 // NewWithEnv creates a new AVD Manager with custom environment configuration.
 func NewWithEnv(env Environment) *Manager {
+	ctx := env.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	return &Manager{
 		env: avd.Env{
-			SDKRoot:    env.SDKRoot,
-			AVDHome:    env.AVDHome,
-			GoldenDir:  env.GoldenDir,
-			ClonesDir:  env.ClonesDir,
-			ConfigTpl:  env.ConfigTemplate,
-			Emulator:   env.EmulatorBin,
-			ADB:        env.ADBBin,
-			AvdMgr:     env.AvdManagerBin,
-			SdkManager: env.SdkManagerBin,
-			QemuImg:    env.QemuImgBin,
+			SDKRoot:       env.SDKRoot,
+			AVDHome:       env.AVDHome,
+			GoldenDir:     env.GoldenDir,
+			ClonesDir:     env.ClonesDir,
+			ConfigTpl:     env.ConfigTemplate,
+			Emulator:      env.EmulatorBin,
+			ADB:           env.ADBBin,
+			AvdMgr:        env.AvdManagerBin,
+			SdkManager:    env.SdkManagerBin,
+			QemuImg:       env.QemuImgBin,
+			CorrelationID: env.CorrelationID,
+			Context:       ctx,
 		},
 	}
 }
 
+// Context returns the context bound to this manager.
+func (m *Manager) Context() context.Context {
+	return m.env.Context
+}
+
+// CorrelationID returns the correlation ID configured on this manager.
+func (m *Manager) CorrelationID() string {
+	return m.env.CorrelationID
+}
+
+func (m *Manager) spanContext() context.Context {
+	if m.env.Context != nil {
+		return m.env.Context
+	}
+	return context.Background()
+}
+
+func (m *Manager) startSpan(name string, attrs ...attribute.KeyValue) (context.Context, trace.Span) {
+	if m.env.CorrelationID != "" {
+		attrs = append(attrs, attribute.String("correlation_id", m.env.CorrelationID))
+	}
+	return managerTracer.Start(m.spanContext(), name, trace.WithAttributes(attrs...))
+}
+
+func (m *Manager) withContext(ctx context.Context) avd.Env {
+	env := m.env
+	if ctx != nil {
+		env.Context = ctx
+	}
+	return env
+}
+
+func (m *Manager) ensureNotRunning(name string) error {
+	if name == "" {
+		return errors.New("empty AVD name")
+	}
+	procs, err := m.ListRunning()
+	if err != nil {
+		return err
+	}
+	for _, proc := range procs {
+		if proc.Name == name {
+			return fmt.Errorf("AVD %s already running on %s", name, proc.Serial)
+		}
+	}
+	return nil
+}
+
+func recordSpanError(span trace.Span, err error) {
+	if err == nil {
+		return
+	}
+	span.RecordError(err)
+}
+
 // Environment holds configuration for AVD tools and paths.
 type Environment struct {
-	SDKRoot         string // ANDROID_SDK_ROOT
-	AVDHome         string // ANDROID_AVD_HOME (default ~/.android/avd)
-	GoldenDir       string // Directory for golden QCOW2 images
-	ClonesDir       string // Directory for clones (optional)
-	ConfigTemplate  string // Path to config.ini template (optional)
-	EmulatorBin     string // Path to emulator binary (default: "emulator")
-	ADBBin          string // Path to adb binary (default: "adb")
-	AvdManagerBin   string // Path to avdmanager binary (default: "avdmanager")
-	SdkManagerBin   string // Path to sdkmanager binary (default: "sdkmanager")
-	QemuImgBin      string // Path to qemu-img binary (default: "qemu-img")
+	SDKRoot        string          // ANDROID_SDK_ROOT
+	AVDHome        string          // ANDROID_AVD_HOME (default ~/.android/avd)
+	GoldenDir      string          // Directory for golden QCOW2 images
+	ClonesDir      string          // Directory for clones (optional)
+	ConfigTemplate string          // Path to config.ini template (optional)
+	EmulatorBin    string          // Path to emulator binary (default: "emulator")
+	ADBBin         string          // Path to adb binary (default: "adb")
+	AvdManagerBin  string          // Path to avdmanager binary (default: "avdmanager")
+	SdkManagerBin  string          // Path to sdkmanager binary (default: "sdkmanager")
+	QemuImgBin     string          // Path to qemu-img binary (default: "qemu-img")
+	CorrelationID  string          // Correlation ID for log enrichment
+	Context        context.Context // Context for tracing
 }
+
+// BootProgressFunc reports boot progress updates.
+type BootProgressFunc func(status string, elapsed time.Duration)
 
 // AVDInfo contains information about an AVD.
 type AVDInfo struct {
@@ -74,9 +171,9 @@ type ProcessInfo struct {
 
 // InitBaseOptions contains options for creating a base AVD.
 type InitBaseOptions struct {
-	Name       string // AVD name (required)
+	Name        string // AVD name (required)
 	SystemImage string // System image ID (e.g., "system-images;android-35;google_apis_playstore;x86_64")
-	Device     string // Device profile (e.g., "pixel_6")
+	Device      string // Device profile (e.g., "pixel_6")
 }
 
 // CloneOptions contains options for creating a clone from a golden image.
@@ -132,7 +229,13 @@ func (m *Manager) InitBase(opts InitBaseOptions) (AVDInfo, error) {
 
 // Clone creates a lightweight clone backed by a golden QCOW2 image.
 func (m *Manager) Clone(opts CloneOptions) (AVDInfo, error) {
-	info, err := avd.CloneFromGolden(m.env, opts.BaseName, opts.CloneName, opts.GoldenPath)
+	ctx, span := m.startSpan(
+		"avdmanager.Clone",
+		attribute.String("avd_name", opts.CloneName),
+	)
+	defer span.End()
+	info, err := avd.CloneFromGolden(m.withContext(ctx), opts.BaseName, opts.CloneName, opts.GoldenPath)
+	recordSpanError(span, err)
 	if err != nil {
 		return AVDInfo{}, err
 	}
@@ -146,16 +249,71 @@ func (m *Manager) Clone(opts CloneOptions) (AVDInfo, error) {
 
 // Run starts an emulator instance headless and returns the serial.
 func (m *Manager) Run(opts RunOptions) (string, error) {
-	return avd.RunAVD(m.env, opts.Name)
+	ctx, span := m.startSpan(
+		"avdmanager.Run",
+		attribute.String("avd_name", opts.Name),
+	)
+	defer span.End()
+	if err := m.ensureNotRunning(opts.Name); err != nil {
+		recordSpanError(span, err)
+		return "", err
+	}
+	serial, err := avd.RunAVD(m.withContext(ctx), opts.Name)
+	recordSpanError(span, err)
+	if err == nil {
+		span.SetAttributes(attribute.String("serial", serial))
+	}
+	return serial, err
 }
 
 // RunOnPort starts an emulator instance on a specific port.
 func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err error) {
+	ctx, span := m.startSpan(
+		"avdmanager.RunOnPort",
+		attribute.String("avd_name", opts.Name),
+		attribute.Int("port", opts.Port),
+	)
+	defer span.End()
 	if opts.Port == 0 {
-		serial, err := avd.RunAVD(m.env, opts.Name)
+		if err := m.ensureNotRunning(opts.Name); err != nil {
+			recordSpanError(span, err)
+			return "", "", err
+		}
+		serial, err = avd.RunAVD(m.withContext(ctx), opts.Name)
+		recordSpanError(span, err)
+		if err == nil {
+			span.SetAttributes(attribute.String("serial", serial))
+		}
 		return serial, "", err
 	}
-	_, serial, logPath, err = avd.StartEmulatorOnPort(m.env, opts.Name, opts.Port)
+	if err := m.ensureNotRunning(opts.Name); err != nil {
+		recordSpanError(span, err)
+		return "", "", err
+	}
+
+	port := opts.Port
+	procs, err := m.ListRunning()
+	if err != nil {
+		recordSpanError(span, err)
+		return "", "", err
+	}
+	for _, proc := range procs {
+		if proc.Port == port {
+			freePort, err := m.FindFreePort(5554, 5800)
+			if err != nil {
+				recordSpanError(span, err)
+				return "", "", err
+			}
+			port = freePort
+			break
+		}
+	}
+
+	_, serial, logPath, err = avd.StartEmulatorOnPort(m.withContext(ctx), opts.Name, port)
+	recordSpanError(span, err)
+	if err == nil {
+		span.SetAttributes(attribute.String("serial", serial))
+	}
 	return serial, logPath, err
 }
 
@@ -198,7 +356,14 @@ func (m *Manager) ListRunning() ([]ProcessInfo, error) {
 
 // Stop stops a running emulator by serial (e.g., "emulator-5580").
 func (m *Manager) Stop(serial string) error {
-	return avd.StopBySerial(m.env, serial)
+	ctx, span := m.startSpan(
+		"avdmanager.Stop",
+		attribute.String("serial", serial),
+	)
+	defer span.End()
+	err := avd.StopBySerial(m.withContext(ctx), serial)
+	recordSpanError(span, err)
+	return err
 }
 
 // StopByName stops a running emulator by AVD name.
@@ -209,7 +374,7 @@ func (m *Manager) StopByName(name string) error {
 	}
 	for _, p := range procs {
 		if p.Name == name {
-			return avd.StopBySerial(m.env, p.Serial)
+			return m.Stop(p.Serial)
 		}
 	}
 	return nil // Not running
@@ -247,7 +412,33 @@ func (m *Manager) BakeAPK(opts BakeAPKOptions) (clonePath string, cloneSize int6
 
 // WaitForBoot waits for an emulator to fully boot Android.
 func (m *Manager) WaitForBoot(serial string, timeout time.Duration) error {
-	return avd.WaitForBoot(m.env, serial, timeout)
+	return m.WaitForBootWithProgress(serial, timeout, nil)
+}
+
+// WaitForBootWithProgress waits for an emulator to fully boot Android and reports progress.
+func (m *Manager) WaitForBootWithProgress(
+	serial string,
+	timeout time.Duration,
+	progress BootProgressFunc,
+) error {
+	ctx, span := m.startSpan(
+		"avdmanager.WaitForBoot",
+		attribute.String("serial", serial),
+	)
+	defer span.End()
+	err := avd.WaitForBootWithProgress(
+		m.withContext(ctx),
+		serial,
+		timeout,
+		func(status string, elapsed time.Duration) {
+			if progress == nil {
+				return
+			}
+			progress(status, elapsed)
+		},
+	)
+	recordSpanError(span, err)
+	return err
 }
 
 // FindFreePort finds a free even port pair for emulator (uses port and port+1).

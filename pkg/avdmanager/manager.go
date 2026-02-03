@@ -169,6 +169,21 @@ type ProcessInfo struct {
 	Booted bool   // Whether Android has fully booted
 }
 
+// KillAllEmulatorsOptions contains options for force-stopping all emulators.
+type KillAllEmulatorsOptions struct {
+	MaxPasses int           // Maximum kill passes (default: 5)
+	Delay     time.Duration // Delay between passes (default: 500ms)
+}
+
+// KillAllEmulatorsReport reports the results of the kill-all operation.
+type KillAllEmulatorsReport struct {
+	Passes        int   // Number of passes executed
+	KilledPIDs    []int // Emulator PIDs killed
+	KilledParents []int // Parent PIDs killed for zombies
+	Remaining     int   // Remaining emulator processes after all passes
+}
+
+
 // InitBaseOptions contains options for creating a base AVD.
 type InitBaseOptions struct {
 	Name        string // AVD name (required)

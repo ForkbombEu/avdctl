@@ -1369,23 +1369,36 @@ func readProcessState(pid int) (string, int, error) {
 	return state, ppid, nil
 }
 
+// KillAllEmulatorsReport reports the results of the kill-all operation.
+type KillAllEmulatorsReport struct {
+	Passes        int   // Number of passes executed
+	KilledPIDs    []int // Emulator PIDs killed
+	KilledParents []int // Parent PIDs killed for zombies
+	Remaining     int   // Remaining emulator processes after all passes
+}
+
 // KillAllEmulators force-stops all qemu/emulator processes, retrying until none remain.
-func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllReport, error) {
-	_, span := startSpan(env, "avd.KillAllEmulators",
-		attribute.Int("max_passes", maxPasses),
-	)
-	defer span.End()
+func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllEmulatorsReport, error) {
 
 	if maxPasses <= 0 {
 		maxPasses = 5
 	}
+
 	if delay <= 0 {
 		delay = 500 * time.Millisecond
 	}
 
-	report := KillAllReport{}
+	_, span := startSpan(env, "avd.KillAllEmulators",
+		attribute.Int("max_passes", maxPasses),
+		attribute.String("delay", delay.String()),
+	)
+	defer span.End()
+
+	report := KillAllEmulatorsReport{}
 	killed := make(map[int]struct{})
 	killedParents := make(map[int]struct{})
+	passesRun := 0
+	var remainingProcs []qemuProcess
 
 	for pass := 0; pass < maxPasses; pass++ {
 		procs, err := listQemuProcesses()
@@ -1394,10 +1407,11 @@ func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllRepor
 			return report, err
 		}
 		if len(procs) == 0 {
-			report.Passes = pass
-			return report, nil
+			remainingProcs = procs
+			break
 		}
 
+		passesRun++
 		for _, proc := range procs {
 			if proc.State == "Z" && proc.ParentPID > 1 {
 				if err := syscall.Kill(proc.ParentPID, syscall.SIGKILL); err == nil {
@@ -1410,16 +1424,21 @@ func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllRepor
 			}
 		}
 
-		report.Passes = pass + 1
-		time.Sleep(delay)
+		if pass < maxPasses-1 {
+			time.Sleep(delay)
+		}
 	}
 
-	remaining, err := listQemuProcesses()
-	if err != nil {
-		recordSpanError(span, err)
-		return report, err
+	if remainingProcs == nil {
+		var err error
+		remainingProcs, err = listQemuProcesses()
+		if err != nil {
+			recordSpanError(span, err)
+			return report, err
+		}
 	}
-	report.Remaining = len(remaining)
+	report.Passes = passesRun
+	report.Remaining = len(remainingProcs)
 	for pid := range killed {
 		report.KilledPIDs = append(report.KilledPIDs, pid)
 	}

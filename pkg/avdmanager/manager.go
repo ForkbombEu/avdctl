@@ -169,21 +169,6 @@ type ProcessInfo struct {
 	Booted bool   // Whether Android has fully booted
 }
 
-// KillAllEmulatorsOptions contains options for force-stopping all emulators.
-type KillAllEmulatorsOptions struct {
-	MaxPasses int           // Maximum kill passes (default: 5)
-	Delay     time.Duration // Delay between passes (default: 500ms)
-}
-
-// KillAllEmulatorsReport reports the results of the kill-all operation.
-type KillAllEmulatorsReport struct {
-	Passes        int   // Number of passes executed
-	KilledPIDs    []int // Emulator PIDs killed
-	KilledParents []int // Parent PIDs killed for zombies
-	Remaining     int   // Remaining emulator processes after all passes
-}
-
-
 // InitBaseOptions contains options for creating a base AVD.
 type InitBaseOptions struct {
 	Name        string // AVD name (required)
@@ -226,6 +211,20 @@ type BakeAPKOptions struct {
 	APKPaths    []string      // Paths to APKs to install (required)
 	Destination string        // Destination path for new golden QCOW2 (optional)
 	BootTimeout time.Duration // Boot timeout (default: 3m)
+}
+
+// KillAllEmulatorsOptions contains options for force-stopping all emulators.
+type KillAllEmulatorsOptions struct {
+	MaxPasses int           // Maximum kill passes (default: 5)
+	Delay     time.Duration // Delay between passes (default: 500ms)
+}
+
+// KillAllEmulatorsReport reports the results of the kill-all operation.
+type KillAllEmulatorsReport struct {
+	Passes        int   // Number of passes executed
+	KilledPIDs    []int // Emulator PIDs killed
+	KilledParents []int // Parent PIDs killed for zombies
+	Remaining     int   // Remaining emulator processes after all passes
 }
 
 // InitBase creates a new base AVD. Auto-installs system image if missing.
@@ -393,6 +392,28 @@ func (m *Manager) StopByName(name string) error {
 		}
 	}
 	return nil // Not running
+}
+
+// KillAllEmulators force-stops all qemu/emulator processes, retrying until none remain.
+func (m *Manager) KillAllEmulators(opts KillAllEmulatorsOptions) (KillAllEmulatorsReport, error) {
+	ctx, span := m.startSpan(
+		"avdmanager.KillAllEmulators",
+		attribute.Int("max_passes", opts.MaxPasses),
+		attribute.String("delay", opts.Delay.String()),
+	)
+	defer span.End()
+
+	report, err := avd.KillAllEmulators(m.withContext(ctx), opts.MaxPasses, opts.Delay)
+	recordSpanError(span, err)
+	if err != nil {
+		return KillAllEmulatorsReport{}, err
+	}
+	return KillAllEmulatorsReport{
+		Passes:        report.Passes,
+		KilledPIDs:    report.KilledPIDs,
+		KilledParents: report.KilledParents,
+		Remaining:     report.Remaining,
+	}, nil
 }
 
 // Delete removes an AVD (both .avd directory and .ini file).

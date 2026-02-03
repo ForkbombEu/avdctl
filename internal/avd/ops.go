@@ -1298,6 +1298,144 @@ func isZombieProcess(pid int) bool {
 	return false
 }
 
+type qemuProcess struct {
+	PID       int
+	ParentPID int
+	State     string
+	Cmdline   string
+}
+
+func listQemuProcesses() ([]qemuProcess, error) {
+	entries, err := filepath.Glob("/proc/[0-9]*/cmdline")
+	if err != nil {
+		return nil, err
+	}
+
+	var procs []qemuProcess
+	for _, entry := range entries {
+		b, err := os.ReadFile(entry)
+		if err != nil || len(b) == 0 {
+			continue
+		}
+		if !bytes.Contains(b, []byte("qemu-system")) && !bytes.Contains(b, []byte("emulator")) {
+			continue
+		}
+		if bytes.Contains(b, []byte("docker-proxy")) {
+			continue
+		}
+
+		base := filepath.Base(filepath.Dir(entry))
+		pid, err := strconv.Atoi(base)
+		if err != nil || pid <= 0 {
+			continue
+		}
+
+		state, ppid, err := readProcessState(pid)
+		if err != nil {
+			continue
+		}
+		cmdline := strings.ReplaceAll(string(b), "\x00", " ")
+		procs = append(procs, qemuProcess{
+			PID:       pid,
+			ParentPID: ppid,
+			State:     state,
+			Cmdline:   strings.TrimSpace(cmdline),
+		})
+	}
+
+	return procs, nil
+}
+
+func readProcessState(pid int) (string, int, error) {
+	statPath := filepath.Join("/proc", strconv.Itoa(pid), "stat")
+	stat, err := os.ReadFile(statPath)
+	if err != nil {
+		return "", 0, err
+	}
+	data := string(stat)
+	rparen := strings.LastIndex(data, ")")
+	if rparen == -1 || rparen+2 >= len(data) {
+		return "", 0, fmt.Errorf("invalid stat format for pid %d", pid)
+	}
+	fields := strings.Fields(data[rparen+2:])
+	if len(fields) < 2 {
+		return "", 0, fmt.Errorf("invalid stat format for pid %d", pid)
+	}
+	state := fields[0]
+	ppid, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return "", 0, err
+	}
+	return state, ppid, nil
+}
+
+// KillAllEmulators force-stops all qemu/emulator processes, retrying until none remain.
+func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllReport, error) {
+	_, span := startSpan(env, "avd.KillAllEmulators",
+		attribute.Int("max_passes", maxPasses),
+	)
+	defer span.End()
+
+	if maxPasses <= 0 {
+		maxPasses = 5
+	}
+	if delay <= 0 {
+		delay = 500 * time.Millisecond
+	}
+
+	report := KillAllReport{}
+	killed := make(map[int]struct{})
+	killedParents := make(map[int]struct{})
+
+	for pass := 0; pass < maxPasses; pass++ {
+		procs, err := listQemuProcesses()
+		if err != nil {
+			recordSpanError(span, err)
+			return report, err
+		}
+		if len(procs) == 0 {
+			report.Passes = pass
+			return report, nil
+		}
+
+		for _, proc := range procs {
+			if proc.State == "Z" && proc.ParentPID > 1 {
+				if err := syscall.Kill(proc.ParentPID, syscall.SIGKILL); err == nil {
+					killedParents[proc.ParentPID] = struct{}{}
+				}
+				continue
+			}
+			if err := syscall.Kill(proc.PID, syscall.SIGKILL); err == nil {
+				killed[proc.PID] = struct{}{}
+			}
+		}
+
+		report.Passes = pass + 1
+		time.Sleep(delay)
+	}
+
+	remaining, err := listQemuProcesses()
+	if err != nil {
+		recordSpanError(span, err)
+		return report, err
+	}
+	report.Remaining = len(remaining)
+	for pid := range killed {
+		report.KilledPIDs = append(report.KilledPIDs, pid)
+	}
+	for pid := range killedParents {
+		report.KilledParents = append(report.KilledParents, pid)
+	}
+	sort.Ints(report.KilledPIDs)
+	sort.Ints(report.KilledParents)
+	if report.Remaining > 0 {
+		logEvent(env, "kill all emulators incomplete", "remaining", report.Remaining, "passes", report.Passes)
+	} else {
+		logEvent(env, "kill all emulators completed", "passes", report.Passes)
+	}
+	return report, nil
+}
+
 // findEmulatorNameFromPID extracts AVD name from process cmdline
 func findEmulatorNameFromPID(pid int) string {
 	if pid == 0 {

@@ -1372,8 +1372,8 @@ func readProcessState(pid int) (string, int, error) {
 // KillAllEmulatorsReport reports the results of the stop-all operation.
 type KillAllEmulatorsReport struct {
 	Passes        int   // Number of passes executed
-	KilledPIDs    []int // Emulator PIDs terminated
-	KilledParents []int // Parent PIDs killed for zombies
+	KilledPIDs    []int // Emulator PIDs that were sent SIGTERM (gracefully terminated)
+	KilledParents []int // Parent PIDs that were sent SIGKILL (for zombie cleanup)
 	Remaining     int   // Remaining emulator processes after all passes
 }
 

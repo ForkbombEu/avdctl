@@ -57,22 +57,35 @@ jobs:
           fi
 
           commits="$(git log --format=%s%n%b $range)"
+          subjects="$(git log --format=%s $range)"
 
           # Conventional commit bump rules:
           # - major: breaking change footer or "type(scope)!:"
           # - minor: feat
-          # - patch: fix or perf
+          # - patch: fix, perf, refactor, revert
           bump=""
+          reason=""
           if echo "$commits" | grep -Eiq 'BREAKING CHANGE|^[a-z]+(\([^)]+\))?!:'; then
             bump="major"
+            reason="breaking change"
           elif echo "$commits" | grep -Eiq '^feat(\([^)]+\))?:'; then
             bump="minor"
-          elif echo "$commits" | grep -Eiq '^(fix|perf)(\([^)]+\))?:'; then
+            reason="feat"
+          elif echo "$subjects" | grep -Eiq '^(fix|perf|refactor|revert)(\([^)]+\))?:'; then
             bump="patch"
+            reason="maintenance/fix commit"
           fi
 
           if [ -z "$bump" ]; then
             echo "release=false" >> "$GITHUB_OUTPUT"
+            echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
+            echo "range=$range" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Semver decision"
+              echo "- Last tag: \`$last_tag\`"
+              echo "- Range: \`$range\`"
+              echo "- Decision: no release (no releasable conventional commits found)"
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -103,6 +116,16 @@ jobs:
 
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "next_tag=$next_tag" >> "$GITHUB_OUTPUT"
+          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
+          echo "range=$range" >> "$GITHUB_OUTPUT"
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Semver decision"
+            echo "- Last tag: \`$last_tag\`"
+            echo "- Range: \`$range\`"
+            echo "- Bump: \`$bump\` ($reason)"
+            echo "- Next tag: \`$next_tag\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create Tag
         if: steps.semver.outputs.release == 'true'

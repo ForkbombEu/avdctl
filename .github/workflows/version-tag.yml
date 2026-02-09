@@ -36,9 +36,9 @@ jobs:
         run: |
           set -euo pipefail
           for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64"; do
-            set -- $target
-            GOOS="$1" GOARCH="$2" CGO_ENABLED=0 go build -o "/tmp/avdctl-$1-$2" ./cmd/avdctl
-            echo "ok $1/$2"
+            read -r goos goarch <<< "$target"
+            GOOS="$goos" GOARCH="$goarch" CGO_ENABLED=0 go build -o "/tmp/avdctl-$goos-$goarch" ./cmd/avdctl
+            echo "ok $goos/$goarch"
           done
 
       - name: Compute Next Version
@@ -57,8 +57,8 @@ jobs:
             range="${last_tag}..HEAD"
           fi
 
-          commits="$(git log --format=%s%n%b $range)"
-          subjects="$(git log --format=%s $range)"
+          commits="$(git log --format=%s%n%b "$range")"
+          subjects="$(git log --format=%s "$range")"
 
           # Conventional commit bump rules:
           # - major: breaking change footer or "type(scope)!:"
@@ -78,9 +78,11 @@ jobs:
           fi
 
           if [ -z "$bump" ]; then
-            echo "release=false" >> "$GITHUB_OUTPUT"
-            echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
-            echo "range=$range" >> "$GITHUB_OUTPUT"
+            {
+              echo "release=false"
+              echo "last_tag=$last_tag"
+              echo "range=$range"
+            } >> "$GITHUB_OUTPUT"
             {
               echo "### Semver decision"
               echo "- Last tag: \`$last_tag\`"
@@ -115,11 +117,13 @@ jobs:
             exit 0
           fi
 
-          echo "release=true" >> "$GITHUB_OUTPUT"
-          echo "next_tag=$next_tag" >> "$GITHUB_OUTPUT"
-          echo "last_tag=$last_tag" >> "$GITHUB_OUTPUT"
-          echo "range=$range" >> "$GITHUB_OUTPUT"
-          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          {
+            echo "release=true"
+            echo "next_tag=$next_tag"
+            echo "last_tag=$last_tag"
+            echo "range=$range"
+            echo "bump=$bump"
+          } >> "$GITHUB_OUTPUT"
           {
             echo "### Semver decision"
             echo "- Last tag: \`$last_tag\`"

@@ -23,5 +23,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+
       - name: Lint GitHub Workflows
-        uses: rhysd/actionlint@v1
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest

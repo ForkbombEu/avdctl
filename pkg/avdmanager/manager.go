@@ -213,16 +213,16 @@ type BakeAPKOptions struct {
 	BootTimeout time.Duration // Boot timeout (default: 3m)
 }
 
-// KillAllEmulatorsOptions contains options for force-stopping all emulators.
+// KillAllEmulatorsOptions contains options for gracefully stopping all emulators.
 type KillAllEmulatorsOptions struct {
-	MaxPasses int           // Maximum kill passes (default: 5)
+	MaxPasses int           // Maximum termination passes (default: 5)
 	Delay     time.Duration // Delay between passes (default: 500ms)
 }
 
-// KillAllEmulatorsReport reports the results of the kill-all operation.
+// KillAllEmulatorsReport reports the results of the stop-all operation.
 type KillAllEmulatorsReport struct {
 	Passes        int   // Number of passes executed
-	KilledPIDs    []int // Emulator PIDs killed
+	KilledPIDs    []int // Emulator PIDs terminated
 	KilledParents []int // Parent PIDs killed for zombies
 	Remaining     int   // Remaining emulator processes after all passes
 }
@@ -394,7 +394,7 @@ func (m *Manager) StopByName(name string) error {
 	return nil // Not running
 }
 
-// KillAllEmulators force-stops all qemu/emulator processes, retrying until none remain.
+// KillAllEmulators gracefully stops all emulator processes using SIGTERM, retrying until none remain.
 func (m *Manager) KillAllEmulators(opts KillAllEmulatorsOptions) (KillAllEmulatorsReport, error) {
 	ctx, span := m.startSpan(
 		"avdmanager.KillAllEmulators",

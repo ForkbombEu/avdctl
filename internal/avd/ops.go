@@ -1690,21 +1690,24 @@ func StopBluetooth(env Env, serial string) error {
 	logEvent(env, "disabling bluetooth", "serial", serial)
 
 	// Execute each command to disable Bluetooth and scanning
-	commands := [][]string{
-		{"-s", serial, "shell", "svc", "bluetooth", "disable"},
-		{"-s", serial, "shell", "settings", "put", "global", "bluetooth_scanning_enabled", "0"},
-		{"-s", serial, "shell", "settings", "put", "global", "wifi_scanning_enabled", "0"},
-		{"-s", serial, "shell", "pm", "clear", "com.android.bluetooth"},
+	commands := []struct {
+		desc string
+		args []string
+	}{
+		{"disable bluetooth service", []string{"-s", serial, "shell", "svc", "bluetooth", "disable"}},
+		{"disable bluetooth scanning", []string{"-s", serial, "shell", "settings", "put", "global", "bluetooth_scanning_enabled", "0"}},
+		{"disable wifi scanning", []string{"-s", serial, "shell", "settings", "put", "global", "wifi_scanning_enabled", "0"}},
+		{"clear bluetooth cache", []string{"-s", serial, "shell", "pm", "clear", "com.android.bluetooth"}},
 	}
 
-	for _, args := range commands {
-		cmd := exec.Command(env.ADB, args...)
+	for _, cmdDef := range commands {
+		cmd := exec.Command(env.ADB, cmdDef.args...)
 		var errBuf bytes.Buffer
 		attachCommandStderr(env, cmd, &errBuf)
 		if err := cmd.Run(); err != nil {
 			recordSpanError(span, err)
-			logEvent(env, "bluetooth disable command failed", "serial", serial, "args", args, "error", err)
-			return fmt.Errorf("failed to execute adb command %v: %w\nOutput: %s", args, err, errBuf.String())
+			logEvent(env, "bluetooth disable command failed", "serial", serial, "command", cmdDef.desc, "error", err)
+			return fmt.Errorf("failed to %s: %w\nOutput: %s", cmdDef.desc, err, errBuf.String())
 		}
 	}
 

@@ -447,7 +447,7 @@ func main() {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env := core.Detect()
 			if stopBtSerial == "" && stopBtName == "" {
-				return fmt.Errorf("use --name or --serial")
+				return fmt.Errorf("either --name or --serial must be specified")
 			}
 			serial := stopBtSerial
 			if serial == "" {

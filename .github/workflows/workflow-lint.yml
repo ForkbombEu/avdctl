@@ -20,13 +20,6 @@ jobs:
   actionlint:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "stable"
-
-      - name: Lint GitHub Workflows
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@latest
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@latest

@@ -21,6 +21,25 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Cross-build preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in "linux amd64" "linux arm64" "darwin amd64" "darwin arm64"; do
+            set -- $target
+            GOOS="$1" GOARCH="$2" CGO_ENABLED=0 go build -o "/tmp/avdctl-$1-$2" ./cmd/avdctl
+            echo "ok $1/$2"
+          done
+
       - name: Compute Next Version
         id: semver
         shell: bash
@@ -94,13 +113,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag "${{ steps.semver.outputs.next_tag }}"
           git push origin "${{ steps.semver.outputs.next_tag }}"
-
-      - name: Setup Go
-        if: steps.semver.outputs.release == 'true'
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache: true
 
       - name: Install Syft
         if: steps.semver.outputs.release == 'true'

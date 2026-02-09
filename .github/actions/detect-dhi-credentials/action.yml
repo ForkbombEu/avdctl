@@ -1,0 +1,28 @@
+name: Detect DHI Credentials
+description: Detects if DHI credentials are available and outputs a boolean flag
+inputs:
+  dhi_username:
+    description: DHI username
+    required: false
+  dhi_token:
+    description: DHI token
+    required: false
+outputs:
+  enabled:
+    description: Whether DHI credentials are available
+    value: ${{ steps.detect.outputs.enabled }}
+runs:
+  using: composite
+  steps:
+    - name: Detect DHI Credentials
+      id: detect
+      shell: bash
+      env:
+        DHI_USERNAME: ${{ inputs.dhi_username }}
+        DHI_TOKEN: ${{ inputs.dhi_token }}
+      run: |
+        if [ -n "$DHI_USERNAME" ] && [ -n "$DHI_TOKEN" ]; then
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "enabled=false" >> "$GITHUB_OUTPUT"
+        fi

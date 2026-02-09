@@ -2,6 +2,28 @@
 
 `avdctl` is a CLI tool for managing Android Virtual Device (AVD) golden images and clones. It enables fast creation of disposable emulator instances backed by QCOW2 golden images, perfect for CI/CD pipelines and parallel testing.
 
+## Install
+
+### Quick Install from Latest Release (Linux/macOS, x86_64/arm64/aarch64)
+
+Installs `avdctl` into `~/.local/bin`:
+
+```bash
+curl -fsSL "https://github.com/ForkbombEu/avdctl/releases/latest/download/avdctl_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m).tar.gz" | tar -xz -C "$HOME/.local/bin" avdctl && chmod +x "$HOME/.local/bin/avdctl"
+```
+
+Make sure `~/.local/bin` is on your `PATH`:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Install with Go
+
+```bash
+GOBIN="$HOME/.local/bin" go install github.com/forkbombeu/avdctl/cmd/avdctl@latest
+```
+
 ## Prerequisites
 
 1. **Android SDK** with command-line tools installed:

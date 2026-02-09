@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,6 +18,16 @@ import (
 	core "github.com/forkbombeu/avdctl/internal/avd"
 	"github.com/forkbombeu/avdctl/pkg/avdmanager"
 )
+
+var version = "dev"
+
+const colophon = `
+                 _      _   _ _
+  __ ___   ____| | ___| |_| | |
+ / _` + "`" + ` \ \ / / _` + "`" + ` |/ __| __| | |
+| (_| |\ V / (_| | (__| |_| | |
+ \__,_| \_/ \__,_|\___|\__|_|_|
+`
 
 func main() {
 	shutdownTracing, err := avdmanager.SetupTracing(context.Background())
@@ -38,6 +49,21 @@ func main() {
 		Use:   "avdctl",
 		Short: "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
 	}
+
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print binary version",
+		Run: func(cmd *cobra.Command, args []string) {
+			v := version
+			if strings.TrimSpace(v) == "" {
+				v = "dev"
+			}
+			fmt.Fprint(os.Stderr, colophon)
+			fmt.Fprintln(os.Stderr, root.Short)
+			fmt.Fprintln(os.Stdout, v)
+		},
+	}
+	root.AddCommand(versionCmd)
 
 	// list
 	var listJSON bool

@@ -1,0 +1,124 @@
+name: version-tag
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  semver-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute Next Version
+        id: semver
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+          last_tag="$(git tag --list 'v*' --sort=-v:refname | head -n 1)"
+
+          if [ -z "$last_tag" ]; then
+            last_tag="v0.0.0"
+            range="HEAD"
+          else
+            range="${last_tag}..HEAD"
+          fi
+
+          commits="$(git log --format=%s%n%b $range)"
+
+          # Conventional commit bump rules:
+          # - major: breaking change footer or "type(scope)!:"
+          # - minor: feat
+          # - patch: fix or perf
+          bump=""
+          if echo "$commits" | grep -Eiq 'BREAKING CHANGE|^[a-z]+(\([^)]+\))?!:'; then
+            bump="major"
+          elif echo "$commits" | grep -Eiq '^feat(\([^)]+\))?:'; then
+            bump="minor"
+          elif echo "$commits" | grep -Eiq '^(fix|perf)(\([^)]+\))?:'; then
+            bump="patch"
+          fi
+
+          if [ -z "$bump" ]; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          version="${last_tag#v}"
+          IFS='.' read -r major minor patch <<< "$version"
+
+          case "$bump" in
+            major)
+              major=$((major + 1))
+              minor=0
+              patch=0
+              ;;
+            minor)
+              minor=$((minor + 1))
+              patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+          esac
+
+          next_tag="v${major}.${minor}.${patch}"
+
+          if git rev-parse "$next_tag" >/dev/null 2>&1; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "next_tag=$next_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create Tag
+        if: steps.semver.outputs.release == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.semver.outputs.next_tag }}"
+          git push origin "${{ steps.semver.outputs.next_tag }}"
+
+      - name: Setup Go
+        if: steps.semver.outputs.release == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Syft
+        if: steps.semver.outputs.release == 'true'
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Release
+        if: steps.semver.outputs.release == 'true'
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GORELEASER_CURRENT_TAG: ${{ steps.semver.outputs.next_tag }}
+
+      - name: Attest Artifacts
+        if: steps.semver.outputs.release == 'true'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-checksums: dist/checksums.txt

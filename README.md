@@ -24,6 +24,17 @@ export PATH="$HOME/.local/bin:$PATH"
 GOBIN="$HOME/.local/bin" go install github.com/forkbombeu/avdctl/cmd/avdctl@latest
 ```
 
+### Use Container Image in Multi-Stage Builds
+
+Published image: `ghcr.io/forkbombeu/avdctl` (tags: `latest`, `vX.Y.Z`)
+
+```dockerfile
+FROM ghcr.io/forkbombeu/avdctl:latest AS avdctl-bin
+
+FROM debian:bookworm-slim
+COPY --from=avdctl-bin /usr/local/bin/avdctl /usr/local/bin/avdctl
+```
+
 ## Prerequisites
 
 1. **Android SDK** with command-line tools installed:

@@ -439,6 +439,43 @@ func main() {
 	stopCmd.Flags().StringVar(&stopSerial, "serial", "", "emulator serial (e.g., emulator-5582)")
 	root.AddCommand(stopCmd)
 
+	// stop-bluetooth
+	var stopBtName, stopBtSerial string
+	stopBluetoothCmd := &cobra.Command{
+		Use:   "stop-bluetooth",
+		Short: "Disable Bluetooth and scanning on a running emulator to prevent 'Bluetooth keeps stopping' errors",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env := core.Detect()
+			if stopBtSerial == "" && stopBtName == "" {
+				return fmt.Errorf("use --name or --serial")
+			}
+			serial := stopBtSerial
+			if serial == "" {
+				procs, err := core.ListRunning(env)
+				if err != nil {
+					return err
+				}
+				for _, p := range procs {
+					if p.Name == stopBtName {
+						serial = p.Serial
+						break
+					}
+				}
+				if serial == "" {
+					return fmt.Errorf("no running emulator named %s", stopBtName)
+				}
+			}
+			if err := core.StopBluetooth(env, serial); err != nil {
+				return err
+			}
+			fmt.Printf("Bluetooth disabled on %s\n", serial)
+			return nil
+		},
+	}
+	stopBluetoothCmd.Flags().StringVar(&stopBtName, "name", "", "AVD name")
+	stopBluetoothCmd.Flags().StringVar(&stopBtSerial, "serial", "", "emulator serial (e.g., emulator-5582)")
+	root.AddCommand(stopBluetoothCmd)
+
 	// cleanup
 	var cleanupForce bool
 	var cleanupDryRun bool

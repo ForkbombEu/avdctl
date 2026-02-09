@@ -1674,3 +1674,40 @@ func StopBySerial(env Env, serial string) error {
 
 	return nil
 }
+
+// StopBluetooth disables Bluetooth and scanning to prevent "Bluetooth keeps stopping" errors
+func StopBluetooth(env Env, serial string) error {
+	if !strings.HasPrefix(serial, "emulator-") {
+		return fmt.Errorf("invalid serial format: %s (expected emulator-XXXX)", serial)
+	}
+
+	_, span := startSpan(
+		env,
+		"avd.StopBluetooth",
+		attribute.String("serial", serial),
+	)
+	defer span.End()
+	logEvent(env, "disabling bluetooth", "serial", serial)
+
+	// Execute each command to disable Bluetooth and scanning
+	commands := [][]string{
+		{"-s", serial, "shell", "svc", "bluetooth", "disable"},
+		{"-s", serial, "shell", "settings", "put", "global", "bluetooth_scanning_enabled", "0"},
+		{"-s", serial, "shell", "settings", "put", "global", "wifi_scanning_enabled", "0"},
+		{"-s", serial, "shell", "pm", "clear", "com.android.bluetooth"},
+	}
+
+	for _, args := range commands {
+		cmd := exec.Command(env.ADB, args...)
+		var errBuf bytes.Buffer
+		attachCommandStderr(env, cmd, &errBuf)
+		if err := cmd.Run(); err != nil {
+			recordSpanError(span, err)
+			logEvent(env, "bluetooth disable command failed", "serial", serial, "args", args, "error", err)
+			return fmt.Errorf("failed to execute adb command %v: %w\nOutput: %s", args, err, errBuf.String())
+		}
+	}
+
+	logEvent(env, "bluetooth disabled successfully", "serial", serial)
+	return nil
+}

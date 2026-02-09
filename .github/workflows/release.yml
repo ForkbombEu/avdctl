@@ -55,15 +55,10 @@ jobs:
 
       - name: Detect DHI Credentials
         id: dhi_creds
-        env:
-          DHI_USERNAME: ${{ secrets.DHI_USERNAME }}
-          DHI_TOKEN: ${{ secrets.DHI_TOKEN }}
-        run: |
-          if [ -n "$DHI_USERNAME" ] && [ -n "$DHI_TOKEN" ]; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-          fi
+        uses: ./.github/actions/detect-dhi-credentials
+        with:
+          dhi_username: ${{ secrets.DHI_USERNAME }}
+          dhi_token: ${{ secrets.DHI_TOKEN }}
 
       - name: Login to DHI (optional)
         if: steps.dhi_creds.outputs.enabled == 'true'

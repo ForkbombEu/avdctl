@@ -17,6 +17,10 @@ vars:
   GOLDEN: "{{.AVDCTL_GOLDEN_DIR}}/{{.BASE_NAME}}-prewarmed.qcow2"
   PORT1: "5580"
   PORT2: "5582"
+  DHI_STATIC_TAG: "20250419"
+  DOCKER_BINARY_IMAGE: "avdctl:local"
+  DOCKER_PLATFORMS: "linux/amd64,linux/arm64"
+  DOCKER_BINARY_OCI: "/tmp/avdctl-local-multi.oci.tar"
 
 
 tasks:
@@ -54,42 +58,6 @@ tasks:
     cmds:
       - ./bin/avdctl prewarm --name "{{.BASE_NAME}}" --dest "{{.GOLDEN}}"
 
-  clone-acme:
-    deps: [build]
-    cmds:
-      - ./bin/avdctl clone --base "{{.BASE_NAME}}" --name "w-acme" --golden "{{.GOLDEN}}"
-
-  clone-gino:
-    deps: [build]
-    cmds:
-      - ./bin/avdctl clone --base "{{.BASE_NAME}}" --name "w-gino" --golden "{{.GOLDEN}}"
-
-  run-acme:
-    deps: [build]
-    cmds:
-      - ./bin/avdctl run --name "w-acme" --port {{.PORT1}}
-
-  run-gino:
-    deps: [build]
-    cmds:
-      - ./bin/avdctl run --name "w-gino" --port {{.PORT2}}
-
-  ps:
-    cmds:
-      - ./bin/avdctl ps
-
-  stop:
-    cmds:
-      - ./bin/avdctl stop --name "{{.NAME}}"
-    vars:
-      NAME: w-acme
-
-  clean-avds:
-    cmds:
-      - adb kill-server || true
-      - rm -rf "$ANDROID_AVD_HOME"/*.avd
-      - rm -f "$ANDROID_AVD_HOME"/*.ini
-
   # full from-scratch flow
   fresh:
     cmds:
@@ -98,3 +66,16 @@ tasks:
       - task prewarm
       - task clone-acme
       - task clone-gino
+
+  docker-build-local:
+    cmds:
+      - docker build -f Dockerfile.binary -t "{{.DOCKER_BINARY_IMAGE}}" --build-arg DHI_STATIC_TAG="{{.DHI_STATIC_TAG}}" .
+
+  docker-run:
+    deps: [docker-build-binary]
+    cmds:
+      - docker run --rm "{{.DOCKER_BINARY_IMAGE}}" --help
+
+  docker-build:
+    cmds:
+      - docker buildx build -f Dockerfile.binary --platform "{{.DOCKER_PLATFORMS}}" --build-arg DHI_STATIC_TAG="{{.DHI_STATIC_TAG}}" -t "{{.DOCKER_BINARY_IMAGE}}" --output "type=oci,dest={{.DOCKER_BINARY_OCI}}" .

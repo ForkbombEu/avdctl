@@ -1369,15 +1369,15 @@ func readProcessState(pid int) (string, int, error) {
 	return state, ppid, nil
 }
 
-// KillAllEmulatorsReport reports the results of the kill-all operation.
+// KillAllEmulatorsReport reports the results of the stop-all operation.
 type KillAllEmulatorsReport struct {
 	Passes        int   // Number of passes executed
-	KilledPIDs    []int // Emulator PIDs killed
-	KilledParents []int // Parent PIDs killed for zombies
+	KilledPIDs    []int // Emulator PIDs that were sent SIGTERM (gracefully terminated)
+	KilledParents []int // Parent PIDs that were sent SIGKILL (for zombie cleanup)
 	Remaining     int   // Remaining emulator processes after all passes
 }
 
-// KillAllEmulators force-stops all qemu/emulator processes, retrying until none remain.
+// KillAllEmulators gracefully stops all emulator processes using SIGTERM, retrying until none remain.
 func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllEmulatorsReport, error) {
 
 	if maxPasses <= 0 {
@@ -1419,7 +1419,8 @@ func KillAllEmulators(env Env, maxPasses int, delay time.Duration) (KillAllEmula
 				}
 				continue
 			}
-			if err := syscall.Kill(proc.PID, syscall.SIGKILL); err == nil {
+			// Use SIGTERM for graceful shutdown instead of SIGKILL
+			if err := syscall.Kill(proc.PID, syscall.SIGTERM); err == nil {
 				killed[proc.PID] = struct{}{}
 			}
 		}

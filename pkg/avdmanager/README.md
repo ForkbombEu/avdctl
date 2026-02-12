@@ -266,6 +266,14 @@ Stop an emulator by AVD name:
 err := mgr.StopByName("customer1")
 ```
 
+#### StopBluetooth
+
+Disable Bluetooth and Bluetooth/Wi-Fi scanning on a running emulator by serial:
+
+```go
+err := mgr.StopBluetooth("emulator-5580")
+```
+
 #### WaitForBoot
 
 Wait for Android to fully boot:

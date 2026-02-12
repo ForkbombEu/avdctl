@@ -72,7 +72,7 @@ tasks:
       - docker build -f Dockerfile.binary -t "{{.DOCKER_BINARY_IMAGE}}" --build-arg DHI_STATIC_TAG="{{.DHI_STATIC_TAG}}" .
 
   docker-run:
-    deps: [docker-build-binary]
+    deps: [docker-build-local]
     cmds:
       - docker run --rm "{{.DOCKER_BINARY_IMAGE}}" --help
 

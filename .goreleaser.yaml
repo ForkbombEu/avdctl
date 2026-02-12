@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: avdctl
+
+builds:
+  - id: avdctl
+    main: ./cmd/avdctl
+    binary: avdctl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
+archives:
+  - id: default
+    ids:
+      - avdctl
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ if eq .Arch \"amd64\" }}x86_64{{ else if and (eq .Os \"linux\") (eq .Arch \"arm64\") }}aarch64{{ else }}{{ .Arch }}{{ end }}"
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - id: archives
+    artifacts: archive
+  - id: source
+    artifacts: source
+
+source:
+  enabled: true
+
+release:
+  prerelease: auto

@@ -1692,13 +1692,17 @@ func StopBluetooth(env Env, serial string) error {
 
 	// Execute each command to disable Bluetooth and scanning
 	commands := []struct {
-		desc string
-		args []string
+		desc     string
+		args     []string
+		required bool
 	}{
-		{"disable bluetooth service", []string{"-s", serial, "shell", "svc", "bluetooth", "disable"}},
-		{"disable bluetooth scanning", []string{"-s", serial, "shell", "settings", "put", "global", "bluetooth_scanning_enabled", "0"}},
-		{"disable wifi scanning", []string{"-s", serial, "shell", "settings", "put", "global", "wifi_scanning_enabled", "0"}},
-		{"clear bluetooth cache", []string{"-s", serial, "shell", "pm", "clear", "com.android.bluetooth"}},
+		{"disable bluetooth service", []string{"-s", serial, "shell", "svc", "bluetooth", "disable"}, true},
+		{"disable bluetooth scanning", []string{"-s", serial, "shell", "settings", "put", "global", "bluetooth_scanning_enabled", "0"}, true},
+		{"disable wifi scanning", []string{"-s", serial, "shell", "settings", "put", "global", "wifi_scanning_enabled", "0"}, true},
+		// Some images use com.google.android.bluetooth while others still expose com.android.bluetooth.
+		// Force-stop is best-effort and intentionally non-fatal if the package does not exist.
+		{"force-stop com.google.android.bluetooth", []string{"-s", serial, "shell", "am", "force-stop", "com.google.android.bluetooth"}, false},
+		{"force-stop com.android.bluetooth", []string{"-s", serial, "shell", "am", "force-stop", "com.android.bluetooth"}, false},
 	}
 
 	for _, cmdDef := range commands {
@@ -1706,9 +1710,12 @@ func StopBluetooth(env Env, serial string) error {
 		var errBuf bytes.Buffer
 		attachCommandStderr(env, cmd, &errBuf)
 		if err := cmd.Run(); err != nil {
-			recordSpanError(span, err)
-			logEvent(env, "bluetooth disable command failed", "serial", serial, "command", cmdDef.desc, "error", err)
-			return fmt.Errorf("failed to %s: %w\nOutput: %s", cmdDef.desc, err, errBuf.String())
+			if cmdDef.required {
+				recordSpanError(span, err)
+				logEvent(env, "bluetooth disable command failed", "serial", serial, "command", cmdDef.desc, "error", err)
+				return fmt.Errorf("failed to %s: %w\nOutput: %s", cmdDef.desc, err, errBuf.String())
+			}
+			logEvent(env, "optional bluetooth command failed", "serial", serial, "command", cmdDef.desc, "error", err)
 		}
 	}
 

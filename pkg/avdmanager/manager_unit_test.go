@@ -183,11 +183,13 @@ exit 1
 		t.Fatalf("unexpected save result: path=%q size=%d", path, size)
 	}
 
-	port, err := m.FindFreePort(5554, 5560)
+	// In restricted CI/sandbox environments binding local ports may be denied.
+	port, err := m.FindFreePort(20000, 20100)
 	if err != nil {
-		t.Fatalf("FindFreePort() error: %v", err)
-	}
-	if port%2 != 0 {
+		if !strings.Contains(err.Error(), "no free even port found") {
+			t.Fatalf("FindFreePort() unexpected error: %v", err)
+		}
+	} else if port%2 != 0 {
 		t.Fatalf("FindFreePort returned odd port: %d", port)
 	}
 }
@@ -416,6 +418,45 @@ exit 0
 	m := newManagerWithBinaries(t, adb, filepath.Join(tmp, "missing-qemu"))
 	if err := m.StopByName("missing"); err != nil {
 		t.Fatalf("StopByName(missing) error: %v", err)
+	}
+}
+
+func TestStopBluetoothValidationAndCommandFailure(t *testing.T) {
+	tmp := t.TempDir()
+	okADB := writeExecScript(t, tmp, "adb-ok", "exit 0\n")
+	m := newManagerWithBinaries(t, okADB, filepath.Join(tmp, "missing-qemu"))
+
+	if err := m.StopBluetooth("bad-serial"); err == nil {
+		t.Fatal("expected validation error for invalid serial")
+	}
+	if err := m.StopBluetooth("emulator-5580"); err != nil {
+		t.Fatalf("StopBluetooth(success) error: %v", err)
+	}
+
+	failADB := writeExecScript(t, tmp, "adb-fail", `
+if [ "$4" = "svc" ]; then
+  echo "boom" 1>&2
+  exit 2
+fi
+exit 0
+`)
+	mFail := newManagerWithBinaries(t, failADB, filepath.Join(tmp, "missing-qemu"))
+	err := mFail.StopBluetooth("emulator-5580")
+	if err == nil {
+		t.Fatal("expected StopBluetooth failure when adb command fails")
+	}
+	if !strings.Contains(err.Error(), "failed to disable bluetooth service") {
+		t.Fatalf("unexpected StopBluetooth error: %v", err)
+	}
+}
+
+func TestListReturnsErrorWhenAVDHomeMissing(t *testing.T) {
+	m := NewWithEnv(Environment{
+		AVDHome: filepath.Join(t.TempDir(), "missing-avd-home"),
+		Context: context.Background(),
+	})
+	if _, err := m.List(); err == nil {
+		t.Fatal("expected List() to fail when AVD home does not exist")
 	}
 }
 

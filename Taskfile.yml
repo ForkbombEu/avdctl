@@ -15,6 +15,7 @@ vars:
   SYS_IMAGE: "system-images;android-35;google_apis_playstore;x86_64"
   DEVICE: "pixel_6"
   GOLDEN: "{{.AVDCTL_GOLDEN_DIR}}/{{.BASE_NAME}}-prewarmed.qcow2"
+  COVERAGE_MIN: "90"
   PORT1: "5580"
   PORT2: "5582"
   DHI_STATIC_TAG: "20250419"
@@ -31,6 +32,15 @@ tasks:
   test:
     cmds:
       - go test ./...
+
+  coverage:
+    env:
+      AVDCTL_CONFIG_TEMPLATE: ""
+    cmds:
+      - go list ./pkg/avdmanager/... | xargs go test -covermode=atomic -coverprofile=coverage.out
+      - go tool cover -func=coverage.out
+      - |
+        go tool cover -func=coverage.out | awk -v min="{{.COVERAGE_MIN}}" '/^total:/ { gsub("%","",$3); printf("Total coverage: %s%% (required: %s%%)\n", $3, min); if (($3 + 0) < (min + 0)) exit 1 }'
 
   env:   # quick show
     cmds:

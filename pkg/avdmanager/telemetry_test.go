@@ -57,6 +57,18 @@ func TestNewTraceExporterWithEndpoint(t *testing.T) {
 	_ = exporter.Shutdown(context.Background())
 }
 
+func TestNewTraceExporterWithHostPortEndpoint(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "localhost:4318")
+	exporter, useBatch, err := newTraceExporter(context.Background())
+	if err != nil {
+		t.Fatalf("newTraceExporter() error: %v", err)
+	}
+	if exporter == nil || !useBatch {
+		t.Fatalf("expected exporter with useBatch=true, got exporter=%v useBatch=%v", exporter, useBatch)
+	}
+	_ = exporter.Shutdown(context.Background())
+}
+
 func TestStdoutTraceExporterWritesSpans(t *testing.T) {
 	var buf bytes.Buffer
 	exporter := newStdoutTraceExporter(&buf)

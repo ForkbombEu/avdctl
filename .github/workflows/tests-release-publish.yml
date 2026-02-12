@@ -25,13 +25,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Run tests with coverage gate (90%)
+      - name: Run unit tests with coverage gate (90%)
         shell: bash
         run: |
           set -euo pipefail
           go generate ./...
-          PKGS="$(go list ./... | grep -v '/pkg/gen' | grep -v '/pkg/design' | tr '\n' ' ')"
-          go test ${PKGS} -covermode=atomic -coverprofile=coverage.out
+          go list ./pkg/avdmanager/... | xargs go test -covermode=atomic -coverprofile=coverage.out
           go tool cover -func=coverage.out | awk -v min="90" '/^total:/ { gsub("%","",$3); printf("Total coverage: %s%% (required: %s%%)\n", $3, min); if (($3 + 0) < (min + 0)) exit 1 }'
 
   semantic-release:

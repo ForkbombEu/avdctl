@@ -380,6 +380,18 @@ func (m *Manager) Stop(serial string) error {
 	return err
 }
 
+// StopBluetooth disables Bluetooth and scanning on a running emulator by serial.
+func (m *Manager) StopBluetooth(serial string) error {
+	ctx, span := m.startSpan(
+		"avdmanager.StopBluetooth",
+		attribute.String("serial", serial),
+	)
+	defer span.End()
+	err := avd.StopBluetooth(m.withContext(ctx), serial)
+	recordSpanError(span, err)
+	return err
+}
+
 // StopByName stops a running emulator by AVD name.
 func (m *Manager) StopByName(name string) error {
 	procs, err := avd.ListRunning(m.env)

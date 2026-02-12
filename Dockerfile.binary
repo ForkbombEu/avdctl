@@ -2,6 +2,8 @@
 # Copyright (C) 2025 Forkbomb B.V.
 # License: AGPL-3.0-only
 
+ARG DHI_STATIC_TAG=20250419
+
 FROM --platform=$BUILDPLATFORM golang:1.25-bookworm AS build
 ARG TARGETOS
 ARG TARGETARCH
@@ -15,7 +17,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/avdctl ./cmd/avdctl
 
-FROM dhi.io/static:latest
+FROM dhi.io/static:${DHI_STATIC_TAG}
 COPY --from=build --chown=65532:65532 /out/avdctl /usr/local/bin/avdctl
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/avdctl"]

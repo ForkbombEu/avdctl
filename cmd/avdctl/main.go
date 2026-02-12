@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -17,6 +18,16 @@ import (
 	core "github.com/forkbombeu/avdctl/internal/avd"
 	"github.com/forkbombeu/avdctl/pkg/avdmanager"
 )
+
+var version = "dev"
+
+const colophon = `
+                 _      _   _ _
+  __ ___   ____| | ___| |_| | |
+ / _` + "`" + ` \ \ / / _` + "`" + ` |/ __| __| | |
+| (_| |\ V / (_| | (__| |_| | |
+ \__,_| \_/ \__,_|\___|\__|_|_|
+`
 
 func main() {
 	shutdownTracing, err := avdmanager.SetupTracing(context.Background())
@@ -38,6 +49,21 @@ func main() {
 		Use:   "avdctl",
 		Short: "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
 	}
+
+	versionCmd := &cobra.Command{
+		Use:   "version",
+		Short: "Print binary version",
+		Run: func(cmd *cobra.Command, args []string) {
+			v := version
+			if strings.TrimSpace(v) == "" {
+				v = "dev"
+			}
+			fmt.Fprint(os.Stderr, colophon)
+			fmt.Fprintln(os.Stderr, root.Short)
+			fmt.Fprintln(os.Stdout, v)
+		},
+	}
+	root.AddCommand(versionCmd)
 
 	// list
 	var listJSON bool
@@ -438,6 +464,43 @@ func main() {
 	stopCmd.Flags().StringVar(&stopName, "name", "", "AVD name")
 	stopCmd.Flags().StringVar(&stopSerial, "serial", "", "emulator serial (e.g., emulator-5582)")
 	root.AddCommand(stopCmd)
+
+	// stop-bluetooth
+	var stopBtName, stopBtSerial string
+	stopBluetoothCmd := &cobra.Command{
+		Use:   "stop-bluetooth",
+		Short: "Disable Bluetooth and scanning on a running emulator to prevent 'Bluetooth keeps stopping' errors",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			env := core.Detect()
+			if stopBtSerial == "" && stopBtName == "" {
+				return fmt.Errorf("either --name or --serial must be specified")
+			}
+			serial := stopBtSerial
+			if serial == "" {
+				procs, err := core.ListRunning(env)
+				if err != nil {
+					return err
+				}
+				for _, p := range procs {
+					if p.Name == stopBtName {
+						serial = p.Serial
+						break
+					}
+				}
+				if serial == "" {
+					return fmt.Errorf("no running emulator named %s", stopBtName)
+				}
+			}
+			if err := core.StopBluetooth(env, serial); err != nil {
+				return err
+			}
+			fmt.Printf("Bluetooth disabled on %s\n", serial)
+			return nil
+		},
+	}
+	stopBluetoothCmd.Flags().StringVar(&stopBtName, "name", "", "AVD name")
+	stopBluetoothCmd.Flags().StringVar(&stopBtSerial, "serial", "", "emulator serial (e.g., emulator-5582)")
+	root.AddCommand(stopBluetoothCmd)
 
 	// cleanup
 	var cleanupForce bool

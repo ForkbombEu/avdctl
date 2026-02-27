@@ -23,14 +23,13 @@ func TestCommandWrapsWithSSH(t *testing.T) {
 		SSHArgs:   []string{"-p", "2222"},
 	}
 	cmd := command(env, "adb", "-s", "emulator-5580", "emu", "kill")
+	remote := sshRemoteCommand(shellJoin([]string{"adb", "-s", "emulator-5580", "emu", "kill"}))
 	want := []string{
 		"ssh",
 		"-p",
 		"2222",
 		"android@runner",
-		"sh",
-		"-lc",
-		"'adb' '-s' 'emulator-5580' 'emu' 'kill'",
+		remote,
 	}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Fatalf("args = %#v, want %#v", cmd.Args, want)
@@ -43,14 +42,13 @@ func TestCommandContextWrapsWithSSH(t *testing.T) {
 		SSHArgs:   []string{"-o", "BatchMode=yes"},
 	}
 	cmd := commandContext(context.Background(), env, "adb", "devices")
+	remote := sshRemoteCommand(shellJoin([]string{"adb", "devices"}))
 	want := []string{
 		"ssh",
 		"-o",
 		"BatchMode=yes",
 		"android@runner",
-		"sh",
-		"-lc",
-		"'adb' 'devices'",
+		remote,
 	}
 	if !reflect.DeepEqual(cmd.Args, want) {
 		t.Fatalf("args = %#v, want %#v", cmd.Args, want)

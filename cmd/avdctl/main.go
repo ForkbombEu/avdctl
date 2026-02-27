@@ -605,12 +605,12 @@ func runRemoteAVDCtl(sshBin, sshTarget string, sshArgs, avdArgs []string) error 
 	remoteArgs := append([]string{"avdctl"}, avdArgs...)
 	remoteCommand := shellJoin(remoteArgs)
 
-	args := make([]string, 0, len(sshArgs)+5)
+	args := make([]string, 0, len(sshArgs)+3)
 	if shouldAllocateTTY(sshArgs) {
 		args = append(args, "-tt")
 	}
 	args = append(args, sshArgs...)
-	args = append(args, sshTarget, "sh", "-lc", remoteCommand)
+	args = append(args, sshTarget, sshRemoteCommand(remoteCommand))
 
 	cmd := exec.Command(sshBin, args...)
 	cmd.Stdin = os.Stdin
@@ -669,6 +669,10 @@ func shellJoin(args []string) string {
 		quoted = append(quoted, shellQuote(arg))
 	}
 	return strings.Join(quoted, " ")
+}
+
+func sshRemoteCommand(command string) string {
+	return "sh -lc " + shellQuote(command)
 }
 
 func shellQuote(s string) string {

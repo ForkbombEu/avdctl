@@ -56,10 +56,14 @@ func buildSSHArgs(env Env, extraEnv []string, bin string, args ...string) []stri
 	cmdArgs = append(cmdArgs, args...)
 
 	remoteCommand := shellJoin(cmdArgs)
-	sshArgs := make([]string, 0, len(env.SSHArgs)+4)
+	sshArgs := make([]string, 0, len(env.SSHArgs)+2)
 	sshArgs = append(sshArgs, env.SSHArgs...)
-	sshArgs = append(sshArgs, env.SSHTarget, "sh", "-lc", remoteCommand)
+	sshArgs = append(sshArgs, env.SSHTarget, sshRemoteCommand(remoteCommand))
 	return sshArgs
+}
+
+func sshRemoteCommand(command string) string {
+	return "sh -lc " + shellQuote(command)
 }
 
 func sshBin(env Env) string {

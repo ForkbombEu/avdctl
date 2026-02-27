@@ -104,8 +104,8 @@ func ensureSysImg(env Env, pkg string) error {
 	if env.SDKRoot != "" {
 		// quick existence probe
 		parts := strings.Split(pkg, ";")
-		if len(parts) >= 3 {
-			p := filepath.Join(env.SDKRoot, "system-images", parts[1], parts[2], "x86_64")
+		if len(parts) >= 4 {
+			p := filepath.Join(env.SDKRoot, "system-images", parts[1], parts[2], parts[3])
 			if _, err := os.Stat(p); err == nil {
 				return nil
 			}
@@ -130,6 +130,8 @@ func InitBase(env Env, name, sysImage, device string) (Info, error) {
 	cmd := exec.Command(env.AvdMgr, "create", "avd",
 		"-n", name, "-k", sysImage, "-d", device, "--force")
 	cmd.Stdin = strings.NewReader("no\n")
+	// Keep avdmanager output location aligned with env.AVDHome and the rest of avdctl.
+	cmd.Env = append(os.Environ(), "ANDROID_AVD_HOME="+env.AVDHome)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Info{}, fmt.Errorf("avdmanager create: %v\n%s", err, out)

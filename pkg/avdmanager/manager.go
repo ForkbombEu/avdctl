@@ -72,6 +72,9 @@ func NewWithEnv(env Environment) *Manager {
 			AvdMgr:        env.AvdManagerBin,
 			SdkManager:    env.SdkManagerBin,
 			QemuImg:       env.QemuImgBin,
+			SSHTarget:     env.SSHTarget,
+			SSHBin:        env.SSHBin,
+			SSHArgs:       env.SSHArgs,
 			CorrelationID: env.CorrelationID,
 			Context:       ctx,
 		},
@@ -145,6 +148,9 @@ type Environment struct {
 	AvdManagerBin  string          // Path to avdmanager binary (default: "avdmanager")
 	SdkManagerBin  string          // Path to sdkmanager binary (default: "sdkmanager")
 	QemuImgBin     string          // Path to qemu-img binary (default: "qemu-img")
+	SSHTarget      string          // Optional SSH target (user@host) for remote command execution
+	SSHBin         string          // Path to ssh binary (default: "ssh")
+	SSHArgs        []string        // Optional extra ssh args (e.g. []string{"-i", "~/.ssh/key"})
 	CorrelationID  string          // Correlation ID for log enrichment
 	Context        context.Context // Context for tracing
 }
@@ -491,5 +497,5 @@ func (m *Manager) WaitForBootWithProgress(
 
 // FindFreePort finds a free even port pair for emulator (uses port and port+1).
 func (m *Manager) FindFreePort(start, end int) (int, error) {
-	return avd.FindFreeEvenPort(start, end)
+	return avd.FindFreeEvenPortWithEnv(m.env, start, end)
 }

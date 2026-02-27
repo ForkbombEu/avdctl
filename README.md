@@ -69,7 +69,15 @@ export ANDROID_SDK_ROOT=/opt/android-sdk              # Your Android SDK path
 export ANDROID_AVD_HOME=$HOME/.android/avd            # Default: ~/.android/avd
 export AVDCTL_GOLDEN_DIR=$HOME/avd-golden             # Default: ~/avd-golden
 export AVDCTL_CONFIG_TEMPLATE=/path/to/config.ini.tpl # Optional: custom config template
+export AVDCTL_SSH_TARGET=android@remote-builder       # Optional: run tool commands over SSH
+export AVDCTL_SSH_ARGS="-p 2222 -o BatchMode=yes"     # Optional: extra ssh args
 ```
+
+All CLI subcommands also support:
+
+- `--ssh user@host`
+- `--ssh-bin /path/to/ssh`
+- `--ssh-arg <value>` (repeatable)
 
 ## Quick Start
 

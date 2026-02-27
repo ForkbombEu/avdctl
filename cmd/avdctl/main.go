@@ -44,11 +44,28 @@ func main() {
 		}()
 	}
 	env := core.Detect()
+	var sshTarget string
+	var sshBin string
+	var sshArgs []string
 
 	root := &cobra.Command{
 		Use:   "avdctl",
 		Short: "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
+		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+			if sshTarget != "" {
+				env.SSHTarget = sshTarget
+			}
+			if sshBin != "" {
+				env.SSHBin = sshBin
+			}
+			if len(sshArgs) > 0 {
+				env.SSHArgs = append([]string(nil), sshArgs...)
+			}
+		},
 	}
+	root.PersistentFlags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) to run tool commands remotely")
+	root.PersistentFlags().StringVar(&sshBin, "ssh-bin", "", "SSH binary path (default: ssh)")
+	root.PersistentFlags().StringArrayVar(&sshArgs, "ssh-arg", nil, "Extra ssh args (repeatable, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key)")
 
 	versionCmd := &cobra.Command{
 		Use:   "version",
@@ -242,7 +259,6 @@ func main() {
 			if runName == "" {
 				return fmt.Errorf("--name is required")
 			}
-			env := core.Detect()
 
 			if runPort > 0 {
 				if runPort%2 != 0 {
@@ -326,7 +342,6 @@ func main() {
 		Use:   "ps",
 		Short: "List running emulators with AVD name, serial, port, PID",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			procs, err := core.ListRunning(env)
 			if err != nil {
 				return err
@@ -360,7 +375,6 @@ func main() {
 		Use:   "status",
 		Short: "Show status for a running emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			if stAll {
 				all, err := core.List(env)
 				if err != nil {
@@ -434,7 +448,6 @@ func main() {
 		Use:   "stop",
 		Short: "Stop a running emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			if stopSerial == "" && stopName == "" {
 				return fmt.Errorf("use --name or --serial")
 			}
@@ -471,7 +484,6 @@ func main() {
 		Use:   "stop-bluetooth",
 		Short: "Disable Bluetooth and scanning on a running emulator to prevent 'Bluetooth keeps stopping' errors",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			if stopBtSerial == "" && stopBtName == "" {
 				return fmt.Errorf("either --name or --serial must be specified")
 			}

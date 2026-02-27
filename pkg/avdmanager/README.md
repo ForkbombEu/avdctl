@@ -392,6 +392,9 @@ The library respects these environment variables (if not overridden):
 - `AVDCTL_GOLDEN_DIR` - Golden images directory (default: `~/avd-golden`)
 - `AVDCTL_CLONES_DIR` - Clones directory (optional)
 - `AVDCTL_CONFIG_TEMPLATE` - Path to custom `config.ini` template (optional)
+- `AVDCTL_SSH_TARGET` - Optional SSH target (e.g., `user@host`) for remote command execution
+- `AVDCTL_SSH_BIN` - Optional SSH binary path (default: `ssh`)
+- `AVDCTL_SSH_ARGS` - Optional extra SSH args (space-separated)
 
 ## Requirements
 
@@ -422,6 +425,7 @@ The library respects these environment variables (if not overridden):
 ## Limitations
 
 - **Linux-only PID detection** - `ProcessInfo.PID` uses `/proc`, won't work on macOS/Windows
+- **SSH mode PID reporting** - When running over SSH, `ProcessInfo.PID` is not available (`0`)
 - **Parallel instances** - Limited by system resources (each emulator needs ~4GB RAM)
 - **Ports** - Emulator uses port pairs (console + adb), must be even numbers
 - **QEMU file locking** - The library automatically disables it (`QEMU_FILE_LOCKING=off`)

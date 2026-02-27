@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -20,6 +21,7 @@ import (
 )
 
 var version = "dev"
+var errRemoteDelegated = errors.New("command delegated to remote avdctl")
 
 const colophon = `
                  _      _   _ _
@@ -51,7 +53,14 @@ func main() {
 	root := &cobra.Command{
 		Use:   "avdctl",
 		Short: "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if shouldDelegateOverSSH(cmd, sshTarget) {
+				remoteArgs := stripSSHFlags(os.Args[1:])
+				if err := runRemoteAVDCtl(sshBin, sshTarget, sshArgs, remoteArgs); err != nil {
+					return err
+				}
+				return errRemoteDelegated
+			}
 			if sshTarget != "" {
 				env.SSHTarget = sshTarget
 			}
@@ -61,6 +70,7 @@ func main() {
 			if len(sshArgs) > 0 {
 				env.SSHArgs = append([]string(nil), sshArgs...)
 			}
+			return nil
 		},
 	}
 	root.PersistentFlags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) to run tool commands remotely")
@@ -554,7 +564,77 @@ func main() {
 	root.AddCommand(cleanupCmd)
 
 	if err := root.Execute(); err != nil {
+		if errors.Is(err, errRemoteDelegated) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func shouldDelegateOverSSH(cmd *cobra.Command, sshTarget string) bool {
+	if strings.TrimSpace(sshTarget) == "" || cmd == nil {
+		return false
+	}
+	if cmd == cmd.Root() {
+		return false
+	}
+	switch cmd.Name() {
+	case "version", "help", "__complete", "__completeNoDesc":
+		return false
+	}
+	return true
+}
+
+func runRemoteAVDCtl(sshBin, sshTarget string, sshArgs, avdArgs []string) error {
+	if strings.TrimSpace(sshBin) == "" {
+		sshBin = "ssh"
+	}
+	remoteArgs := append([]string{"avdctl"}, avdArgs...)
+	remoteCommand := shellJoin(remoteArgs)
+
+	args := make([]string, 0, len(sshArgs)+4)
+	args = append(args, sshArgs...)
+	args = append(args, sshTarget, "sh", "-lc", remoteCommand)
+
+	cmd := exec.Command(sshBin, args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
+func stripSSHFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--ssh" || arg == "--ssh-bin" || arg == "--ssh-arg":
+			if i+1 < len(args) {
+				i++
+			}
+		case strings.HasPrefix(arg, "--ssh="),
+			strings.HasPrefix(arg, "--ssh-bin="),
+			strings.HasPrefix(arg, "--ssh-arg="):
+			continue
+		default:
+			out = append(out, arg)
+		}
+	}
+	return out
+}
+
+func shellJoin(args []string) string {
+	quoted := make([]string, 0, len(args))
+	for _, arg := range args {
+		quoted = append(quoted, shellQuote(arg))
+	}
+	return strings.Join(quoted, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

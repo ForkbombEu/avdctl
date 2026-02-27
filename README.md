@@ -79,6 +79,11 @@ All CLI subcommands also support:
 - `--ssh-bin /path/to/ssh`
 - `--ssh-arg <value>` (repeatable)
 
+When `--ssh` is enabled, `avdctl` delegates the whole command to a remote `avdctl`
+process over a single SSH session. Path arguments (for example `--golden`, `--dest`)
+are interpreted on the remote host, not on the local machine. Ensure `avdctl` is
+installed on the remote host and available in `PATH`.
+
 ## Quick Start
 
 ### 1. Build

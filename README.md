@@ -109,6 +109,27 @@ go build -o bin/avdctl ./cmd/avdctl
   --device pixel_6
 ```
 
+## Redroid Commands
+
+`avdctl` also supports Redroid lifecycle operations:
+
+```bash
+# Restore data tar + start container
+./bin/avdctl redroid start \
+  --name redroid15 \
+  --image magsafe/redroid15gappsmagisk:latest \
+  --data-dir "$HOME/redroid-data" \
+  --data-tar "$HOME/redroid-data.tar" \
+  --port 5555
+
+# Wait until Android framework services are ready
+./bin/avdctl redroid wait --serial 127.0.0.1:5555 --timeout 3m
+
+# Stop/remove container
+./bin/avdctl redroid stop --name redroid15
+./bin/avdctl redroid delete --name redroid15
+```
+
 ### 3. Boot and Configure (Manual Setup)
 
 Now boot the AVD with a GUI to configure it manually:

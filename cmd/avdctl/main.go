@@ -18,6 +18,7 @@ import (
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
 	"github.com/forkbombeu/avdctl/pkg/avdmanager"
+	"github.com/forkbombeu/avdctl/pkg/redroidmanager"
 )
 
 var version = "dev"
@@ -564,6 +565,127 @@ func main() {
 	cleanupCmd.Flags().BoolVar(&cleanupForce, "force", false, "delete orphans")
 	cleanupCmd.Flags().BoolVar(&cleanupDryRun, "dry-run", false, "show what would be cleaned")
 	root.AddCommand(cleanupCmd)
+
+	// redroid
+	homeDir := ""
+	if h, err := os.UserHomeDir(); err == nil {
+		homeDir = h
+	}
+	defaultDataDir := filepath.Join(homeDir, "redroid-data")
+	defaultDataTar := filepath.Join(homeDir, "redroid-data.tar")
+	redroidCmd := &cobra.Command{
+		Use:   "redroid",
+		Short: "Manage Redroid docker containers",
+	}
+
+	var rdName, rdImage, rdDataDir, rdDataTar, rdShmSize, rdMemory, rdCPUs, rdBinderFS string
+	var rdPort, rdWidth, rdHeight, rdDPI int
+	redroidStartCmd := &cobra.Command{
+		Use:   "start",
+		Short: "Restore redroid data tar and start Redroid container",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := redroidmanager.New()
+			containerID, err := mgr.Start(redroidmanager.StartOptions{
+				Name:     rdName,
+				Image:    rdImage,
+				DataDir:  rdDataDir,
+				DataTar:  rdDataTar,
+				HostPort: rdPort,
+				ShmSize:  rdShmSize,
+				Memory:   rdMemory,
+				CPUs:     rdCPUs,
+				BinderFS: rdBinderFS,
+				Width:    rdWidth,
+				Height:   rdHeight,
+				DPI:      rdDPI,
+			})
+			if err != nil {
+				return err
+			}
+			if containerID == "" {
+				fmt.Printf("Started %s\n", rdName)
+				return nil
+			}
+			fmt.Printf("Started %s (%s)\n", rdName, containerID)
+			return nil
+		},
+	}
+	redroidStartCmd.Flags().StringVar(&rdName, "name", "redroid15", "container name")
+	redroidStartCmd.Flags().StringVar(&rdImage, "image", "magsafe/redroid15gappsmagisk:latest", "docker image")
+	redroidStartCmd.Flags().StringVar(&rdDataDir, "data-dir", defaultDataDir, "redroid data directory to mount at /data")
+	redroidStartCmd.Flags().StringVar(&rdDataTar, "data-tar", defaultDataTar, "tar archive to restore before start")
+	redroidStartCmd.Flags().IntVar(&rdPort, "port", 5555, "host port mapped to container adb port 5555")
+	redroidStartCmd.Flags().StringVar(&rdShmSize, "shm-size", "3g", "docker --shm-size value")
+	redroidStartCmd.Flags().StringVar(&rdMemory, "memory", "5g", "docker --memory value")
+	redroidStartCmd.Flags().StringVar(&rdCPUs, "cpus", "4", "docker --cpus value")
+	redroidStartCmd.Flags().StringVar(&rdBinderFS, "binderfs", "/dev/binderfs", "binderfs mount source path")
+	redroidStartCmd.Flags().IntVar(&rdWidth, "width", 1080, "androidboot.redroid_width")
+	redroidStartCmd.Flags().IntVar(&rdHeight, "height", 2400, "androidboot.redroid_height")
+	redroidStartCmd.Flags().IntVar(&rdDPI, "dpi", 360, "androidboot.redroid_dpi")
+	redroidCmd.AddCommand(redroidStartCmd)
+
+	var rdWaitSerial string
+	var rdWaitTimeout, rdWaitPoll time.Duration
+	redroidWaitCmd := &cobra.Command{
+		Use:   "wait",
+		Short: "Wait until Redroid boot and framework services are ready",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := redroidmanager.New()
+			if err := mgr.WaitForBoot(redroidmanager.WaitOptions{
+				Serial:       rdWaitSerial,
+				Timeout:      rdWaitTimeout,
+				PollInterval: rdWaitPoll,
+			}); err != nil {
+				return err
+			}
+			fmt.Printf("Redroid ready on %s\n", rdWaitSerial)
+			return nil
+		},
+	}
+	redroidWaitCmd.Flags().StringVar(&rdWaitSerial, "serial", "127.0.0.1:5555", "adb serial, e.g. 127.0.0.1:5555")
+	redroidWaitCmd.Flags().DurationVar(&rdWaitTimeout, "timeout", 3*time.Minute, "wait timeout")
+	redroidWaitCmd.Flags().DurationVar(&rdWaitPoll, "poll", 1*time.Second, "poll interval")
+	redroidCmd.AddCommand(redroidWaitCmd)
+
+	var rdStopName string
+	redroidStopCmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop a Redroid container by name",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(rdStopName) == "" {
+				return errors.New("--name is required")
+			}
+			mgr := redroidmanager.New()
+			if err := mgr.Stop(rdStopName); err != nil {
+				return err
+			}
+			fmt.Printf("Stopped %s\n", rdStopName)
+			return nil
+		},
+	}
+	redroidStopCmd.Flags().StringVar(&rdStopName, "name", "", "container name")
+	redroidCmd.AddCommand(redroidStopCmd)
+
+	var rdDeleteName string
+	redroidDeleteCmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Force remove a Redroid container by name",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(rdDeleteName) == "" {
+				return errors.New("--name is required")
+			}
+			mgr := redroidmanager.New()
+			if err := mgr.Delete(rdDeleteName); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted %s\n", rdDeleteName)
+			return nil
+		},
+	}
+	redroidDeleteCmd.Flags().StringVar(&rdDeleteName, "name", "", "container name")
+	redroidCmd.AddCommand(redroidDeleteCmd)
+
+	root.AddCommand(redroidCmd)
 
 	if err := root.Execute(); err != nil {
 		if isRemoteDelegatedError(err) {

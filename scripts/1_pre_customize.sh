@@ -6,7 +6,7 @@ BASE_NAME="base-customizable"
 INIT_SPEC="${INIT_SPEC:-system-images;android-35;google_apis_playstore;x86_64;pixel_6}"
 
 echo "==> Step 1: Creating base AVD '$BASE_NAME'..."
-./bin/avdctl init --name "$BASE_NAME" --spec "$INIT_SPEC" || {
+./bin/avdctl init-base --name "$BASE_NAME" --spec "$INIT_SPEC" || {
     echo "Base AVD already exists or failed to create"
 }
 

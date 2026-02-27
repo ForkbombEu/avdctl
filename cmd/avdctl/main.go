@@ -90,12 +90,52 @@ func main() {
 	root.AddCommand(listCmd)
 
 	// init-base
-	var baseName, sysImg, device string
+	var baseName, sysImg, device, initSpec string
 	initCmd := &cobra.Command{
 		Use:   "init-base",
-		Short: "Create a base AVD (auto-installs system image if missing)",
+		Short: "Create a base AVD (from --spec or --image/--device)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if baseName == "" {
+			if strings.TrimSpace(initSpec) != "" {
+				if cmd.Flags().Changed("image") || cmd.Flags().Changed("device") {
+					return errors.New("--image/--device cannot be used with --spec")
+				}
+
+				parsed, err := core.ParseInitSpec(initSpec)
+				if err != nil {
+					return err
+				}
+
+				switch parsed.Kind {
+				case core.InitKindAVD:
+					name := strings.TrimSpace(baseName)
+					if !cmd.Flags().Changed("name") || name == "" {
+						name = core.DefaultInitName(initSpec)
+					}
+
+					inf, err := core.InitBase(env, name, parsed.SystemImage, parsed.Device)
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Initialized AVD %s at %s\n", inf.Name, inf.Path)
+					fmt.Printf("Spec: image=%s device=%s\n", parsed.SystemImage, parsed.Device)
+					return nil
+				case core.InitKindRedroid:
+					fmt.Printf(
+						"Parsed redroid spec: image=%s android=%s flavor=%s arch=%s profile=%s\n",
+						parsed.ImageName,
+						parsed.AndroidVersion,
+						parsed.Flavor,
+						parsed.Arch,
+						parsed.Profile,
+					)
+					fmt.Println("Redroid image creation is not implemented yet.")
+					return nil
+				default:
+					return fmt.Errorf("unsupported init kind: %q", parsed.Kind)
+				}
+			}
+
+			if strings.TrimSpace(baseName) == "" {
 				return errors.New("--name is required")
 			}
 			inf, err := core.InitBase(env, baseName, sysImg, device)
@@ -109,55 +149,8 @@ func main() {
 	initCmd.Flags().StringVar(&baseName, "name", "base-a35", "AVD name (include API, e.g. base-a35)")
 	initCmd.Flags().StringVar(&sysImg, "image", "system-images;android-35;google_apis_playstore;x86_64", "System image ID")
 	initCmd.Flags().StringVar(&device, "device", "pixel_6", "Device profile")
+	initCmd.Flags().StringVar(&initSpec, "spec", "", "Init descriptor string (semicolon-separated)")
 	root.AddCommand(initCmd)
-
-	// init (unified spec parser)
-	var initSpec, initName string
-	unifiedInitCmd := &cobra.Command{
-		Use:   "init --spec <spec>",
-		Short: "Initialize from a semicolon spec (AVD create; redroid parse-only)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(initSpec) == "" {
-				return errors.New("--spec is required")
-			}
-
-			parsed, err := core.ParseInitSpec(initSpec)
-			if err != nil {
-				return err
-			}
-
-			switch parsed.Kind {
-			case core.InitKindAVD:
-				name := strings.TrimSpace(initName)
-				if name == "" {
-					name = core.DefaultInitName(initSpec)
-				}
-				inf, err := core.InitBase(env, name, parsed.SystemImage, parsed.Device)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("Initialized AVD %s at %s\n", inf.Name, inf.Path)
-				fmt.Printf("Spec: image=%s device=%s\n", parsed.SystemImage, parsed.Device)
-				return nil
-			case core.InitKindRedroid:
-				fmt.Printf(
-					"Parsed redroid spec: image=%s android=%s flavor=%s arch=%s profile=%s\n",
-					parsed.ImageName,
-					parsed.AndroidVersion,
-					parsed.Flavor,
-					parsed.Arch,
-					parsed.Profile,
-				)
-				fmt.Println("Redroid image creation is not implemented yet.")
-				return nil
-			default:
-				return fmt.Errorf("unsupported init kind: %q", parsed.Kind)
-			}
-		},
-	}
-	unifiedInitCmd.Flags().StringVar(&initSpec, "spec", "", "Init descriptor string (semicolon-separated)")
-	unifiedInitCmd.Flags().StringVar(&initName, "name", "", "AVD name override (optional for AVD specs)")
-	root.AddCommand(unifiedInitCmd)
 
 	// save-golden
 	var sgName, sgDest string

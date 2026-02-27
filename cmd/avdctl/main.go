@@ -51,8 +51,10 @@ func main() {
 	var sshArgs []string
 
 	root := &cobra.Command{
-		Use:   "avdctl",
-		Short: "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
+		Use:           "avdctl",
+		Short:         "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
+		SilenceErrors: true,
+		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if shouldDelegateOverSSH(cmd, sshTarget) {
 				remoteArgs := stripSSHFlags(os.Args[1:])
@@ -564,12 +566,22 @@ func main() {
 	root.AddCommand(cleanupCmd)
 
 	if err := root.Execute(); err != nil {
-		if errors.Is(err, errRemoteDelegated) {
+		if isRemoteDelegatedError(err) {
 			return
 		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func isRemoteDelegatedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errRemoteDelegated) {
+		return true
+	}
+	return strings.Contains(err.Error(), errRemoteDelegated.Error())
 }
 
 func shouldDelegateOverSSH(cmd *cobra.Command, sshTarget string) bool {
@@ -593,7 +605,10 @@ func runRemoteAVDCtl(sshBin, sshTarget string, sshArgs, avdArgs []string) error 
 	remoteArgs := append([]string{"avdctl"}, avdArgs...)
 	remoteCommand := shellJoin(remoteArgs)
 
-	args := make([]string, 0, len(sshArgs)+4)
+	args := make([]string, 0, len(sshArgs)+5)
+	if shouldAllocateTTY(sshArgs) {
+		args = append(args, "-tt")
+	}
 	args = append(args, sshArgs...)
 	args = append(args, sshTarget, "sh", "-lc", remoteCommand)
 
@@ -602,6 +617,30 @@ func runRemoteAVDCtl(sshBin, sshTarget string, sshArgs, avdArgs []string) error 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+func shouldAllocateTTY(sshArgs []string) bool {
+	if !isTerminalFile(os.Stdin) || !isTerminalFile(os.Stdout) {
+		return false
+	}
+	for _, arg := range sshArgs {
+		switch arg {
+		case "-t", "-tt", "-T":
+			return false
+		}
+	}
+	return true
+}
+
+func isTerminalFile(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
 }
 
 func stripSSHFlags(args []string) []string {

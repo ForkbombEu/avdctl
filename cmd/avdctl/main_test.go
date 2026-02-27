@@ -115,3 +115,15 @@ func TestShouldDelegateOverSSH(t *testing.T) {
 		t.Fatal("delegation should require ssh target")
 	}
 }
+
+func TestShouldAllocateTTYRespectsSSHArgsOverrides(t *testing.T) {
+	if shouldAllocateTTY([]string{"-T"}) {
+		t.Fatal("shouldAllocateTTY should be false when -T is provided")
+	}
+	if shouldAllocateTTY([]string{"-t"}) {
+		t.Fatal("shouldAllocateTTY should be false when -t is provided")
+	}
+	if shouldAllocateTTY([]string{"-tt"}) {
+		t.Fatal("shouldAllocateTTY should be false when -tt is provided")
+	}
+}

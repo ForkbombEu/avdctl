@@ -562,12 +562,13 @@ func main() {
 	root.AddCommand(cleanupCmd)
 
 	// redroid
-	homeDir := ""
-	if h, err := os.UserHomeDir(); err == nil {
-		homeDir = h
+	configDir := ""
+	if c, err := os.UserConfigDir(); err == nil {
+		configDir = c
 	}
-	defaultDataDir := filepath.Join(homeDir, "redroid-data")
-	defaultDataTar := filepath.Join(homeDir, "redroid-data.tar")
+	defaultRedroidDir := filepath.Join(configDir, "avdctl", "golden")
+	defaultDataDir := filepath.Join(defaultRedroidDir, "redroid-data")
+	defaultDataTar := filepath.Join(defaultRedroidDir, "redroid-data.tar")
 	redroidCmd := &cobra.Command{
 		Use:   "redroid",
 		Short: "Manage Redroid docker containers",

@@ -12,26 +12,59 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/containerd/errdefs"
+	"github.com/docker/go-units"
+	"github.com/forkbombeu/avdctl/internal/sshclient"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
 )
 
 // Manager provides Redroid lifecycle operations.
 type Manager struct {
-	env Environment
+	env    Environment
+	docker dockerClient
 }
 
 // Environment defines binaries and optional SSH transport.
 type Environment struct {
-	DockerBin string
-	ADBBin    string
-	TarBin    string
+	DockerHost string
+	ADBBin     string
+	TarBin     string
 
 	SSHTarget string
-	SSHBin    string
 	SSHArgs   []string
 
 	Context context.Context
+}
+
+type dockerRunOptions struct {
+	Name     string
+	Image    string
+	DataDir  string
+	HostPort int
+	ShmSize  string
+	Memory   string
+	CPUs     string
+	BinderFS string
+	Width    int
+	Height   int
+	DPI      int
+}
+
+type dockerClient interface {
+	RemoveContainer(ctx context.Context, name string, force bool) error
+	RunContainer(ctx context.Context, opts dockerRunOptions) (string, error)
+	StopContainer(ctx context.Context, name string) error
+}
+
+type dockerSDKClient struct {
+	cli *client.Client
 }
 
 // StartOptions configures container start behavior.
@@ -64,34 +97,30 @@ type WaitOptions struct {
 // New creates a manager with defaults and env-based SSH settings.
 func New() *Manager {
 	return NewWithEnv(Environment{
-		DockerBin: "docker",
-		ADBBin:    "adb",
-		TarBin:    "tar",
-		SSHTarget: os.Getenv("AVDCTL_SSH_TARGET"),
-		SSHBin:    getenv("AVDCTL_SSH_BIN", "ssh"),
-		SSHArgs:   strings.Fields(os.Getenv("AVDCTL_SSH_ARGS")),
-		Context:   context.Background(),
+		DockerHost: strings.TrimSpace(os.Getenv("DOCKER_HOST")),
+		ADBBin:     "adb",
+		TarBin:     "tar",
+		SSHTarget:  os.Getenv("AVDCTL_SSH_TARGET"),
+		SSHArgs:    strings.Fields(os.Getenv("AVDCTL_SSH_ARGS")),
+		Context:    context.Background(),
 	})
 }
 
 // NewWithEnv creates a manager with explicit configuration.
 func NewWithEnv(env Environment) *Manager {
-	if strings.TrimSpace(env.DockerBin) == "" {
-		env.DockerBin = "docker"
-	}
 	if strings.TrimSpace(env.ADBBin) == "" {
 		env.ADBBin = "adb"
 	}
 	if strings.TrimSpace(env.TarBin) == "" {
 		env.TarBin = "tar"
 	}
-	if strings.TrimSpace(env.SSHBin) == "" {
-		env.SSHBin = "ssh"
-	}
 	if env.Context == nil {
 		env.Context = context.Background()
 	}
-	return &Manager{env: env}
+	return &Manager{
+		env:    env,
+		docker: newDockerSDKClient(env),
+	}
 }
 
 // Start restores data from tar and starts a Redroid container.
@@ -146,31 +175,21 @@ func (m *Manager) Start(opts StartOptions) (string, error) {
 	}
 
 	// Best-effort cleanup if already present.
-	_, _ = m.runOutput(m.env.DockerBin, "rm", "-f", opts.Name)
+	_ = m.docker.RemoveContainer(m.context(), opts.Name, true)
 
-	args := []string{
-		"run", "-d",
-		"--name", opts.Name,
-		"--privileged",
-		"--shm-size=" + opts.ShmSize,
-		"--memory=" + opts.Memory,
-		"--cpus=" + opts.CPUs,
-		"-v", opts.BinderFS + ":/dev/binderfs",
-		"-v", opts.DataDir + ":/data",
-		"-p", fmt.Sprintf("%d:5555", opts.HostPort),
-		opts.Image,
-		"androidboot.use_memfd=1",
-		"androidboot.hardware=redroid",
-		fmt.Sprintf("androidboot.redroid_width=%d", opts.Width),
-		fmt.Sprintf("androidboot.redroid_height=%d", opts.Height),
-		fmt.Sprintf("androidboot.redroid_dpi=%d", opts.DPI),
-	}
-
-	out, err := m.runOutput(m.env.DockerBin, args...)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(out), nil
+	return m.docker.RunContainer(m.context(), dockerRunOptions{
+		Name:     opts.Name,
+		Image:    opts.Image,
+		DataDir:  opts.DataDir,
+		HostPort: opts.HostPort,
+		ShmSize:  opts.ShmSize,
+		Memory:   opts.Memory,
+		CPUs:     opts.CPUs,
+		BinderFS: opts.BinderFS,
+		Width:    opts.Width,
+		Height:   opts.Height,
+		DPI:      opts.DPI,
+	})
 }
 
 // WaitForBoot waits until framework services are available.
@@ -216,7 +235,7 @@ func (m *Manager) Stop(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("empty container name")
 	}
-	return m.run(m.env.DockerBin, "stop", name)
+	return m.docker.StopContainer(m.context(), name)
 }
 
 // Delete force-removes a Redroid container by name.
@@ -224,7 +243,14 @@ func (m *Manager) Delete(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("empty container name")
 	}
-	return m.run(m.env.DockerBin, "rm", "-f", name)
+	return m.docker.RemoveContainer(m.context(), name, true)
+}
+
+func (m *Manager) context() context.Context {
+	if m.env.Context == nil {
+		return context.Background()
+	}
+	return m.env.Context
 }
 
 func (m *Manager) adbShell(serial string, args ...string) (string, error) {
@@ -244,6 +270,13 @@ func (m *Manager) runOutput(bin string, args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		out, errOut, err := sshclient.RunOutputArgs(ctx, m.env.SSHTarget, m.env.SSHArgs, append([]string{bin}, args...))
+		if err != nil {
+			return "", fmt.Errorf("%s %v failed: %w\n%s", bin, args, err, strings.TrimSpace(errOut))
+		}
+		return out, nil
+	}
 	cmd := m.commandContext(ctx, bin, args...)
 	var out bytes.Buffer
 	var errOut bytes.Buffer
@@ -256,35 +289,158 @@ func (m *Manager) runOutput(bin string, args ...string) (string, error) {
 }
 
 func (m *Manager) commandContext(ctx context.Context, bin string, args ...string) *exec.Cmd {
-	if strings.TrimSpace(m.env.SSHTarget) == "" {
-		return exec.CommandContext(ctx, bin, args...)
-	}
-	cmdArgs := append([]string{bin}, args...)
-	remote := "sh -lc " + shellQuote(shellJoin(cmdArgs))
-	sshArgs := append([]string{}, m.env.SSHArgs...)
-	sshArgs = append(sshArgs, m.env.SSHTarget, remote)
-	return exec.CommandContext(ctx, m.env.SSHBin, sshArgs...)
+	return exec.CommandContext(ctx, bin, args...)
 }
 
-func shellJoin(args []string) string {
-	quoted := make([]string, 0, len(args))
-	for _, arg := range args {
-		quoted = append(quoted, shellQuote(arg))
+func newDockerSDKClient(env Environment) dockerClient {
+	opts := []client.Opt{
+		client.FromEnv,
 	}
-	return strings.Join(quoted, " ")
+	if host := dockerHostFromEnv(env); host != "" {
+		opts = append(opts, client.WithHost(host))
+	}
+
+	cli, err := client.New(opts...)
+	if err != nil {
+		return &dockerClientInitError{err: err}
+	}
+	return &dockerSDKClient{cli: cli}
 }
 
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
+func dockerHostFromEnv(env Environment) string {
+	if strings.TrimSpace(env.DockerHost) != "" {
+		return strings.TrimSpace(env.DockerHost)
 	}
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+	if strings.TrimSpace(env.SSHTarget) != "" {
+		return "ssh://" + strings.TrimSpace(env.SSHTarget)
+	}
+	return ""
 }
 
-func getenv(key, fallback string) string {
-	value := strings.TrimSpace(os.Getenv(key))
-	if value == "" {
-		return fallback
+func parseMemoryBytes(value string) (int64, error) {
+	bytesValue, err := units.RAMInBytes(value)
+	if err != nil {
+		return 0, fmt.Errorf("invalid memory value %q: %w", value, err)
 	}
-	return value
+	return bytesValue, nil
+}
+
+func parseCPUNano(value string) (int64, error) {
+	f, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid cpus value %q: %w", value, err)
+	}
+	if f <= 0 {
+		return 0, fmt.Errorf("invalid cpus value %q: must be > 0", value)
+	}
+	return int64(f * 1_000_000_000), nil
+}
+
+func (d *dockerSDKClient) RemoveContainer(ctx context.Context, name string, force bool) error {
+	if d.cli == nil {
+		return errors.New("docker client not initialized")
+	}
+	_, err := d.cli.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: force})
+	if err != nil && errdefs.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (d *dockerSDKClient) StopContainer(ctx context.Context, name string) error {
+	if d.cli == nil {
+		return errors.New("docker client not initialized")
+	}
+	timeout := 15
+	_, err := d.cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
+	return err
+}
+
+func (d *dockerSDKClient) RunContainer(ctx context.Context, opts dockerRunOptions) (string, error) {
+	if d.cli == nil {
+		return "", errors.New("docker client not initialized")
+	}
+	shmSize, err := parseMemoryBytes(opts.ShmSize)
+	if err != nil {
+		return "", err
+	}
+	memory, err := parseMemoryBytes(opts.Memory)
+	if err != nil {
+		return "", err
+	}
+	nanoCPUs, err := parseCPUNano(opts.CPUs)
+	if err != nil {
+		return "", err
+	}
+
+	portKey, err := network.ParsePort("5555/tcp")
+	if err != nil {
+		return "", fmt.Errorf("invalid container port: %w", err)
+	}
+	hostConfig := &container.HostConfig{
+		Privileged: true,
+		ShmSize:    shmSize,
+		Resources: container.Resources{
+			Memory:   memory,
+			NanoCPUs: nanoCPUs,
+		},
+		Mounts: []mount.Mount{
+			{
+				Type:   mount.TypeBind,
+				Source: opts.BinderFS,
+				Target: "/dev/binderfs",
+			},
+			{
+				Type:   mount.TypeBind,
+				Source: opts.DataDir,
+				Target: "/data",
+			},
+		},
+		PortBindings: network.PortMap{
+			portKey: []network.PortBinding{{HostPort: strconv.Itoa(opts.HostPort)}},
+		},
+	}
+
+	cfg := &container.Config{
+		Image: opts.Image,
+		Cmd: []string{
+			"androidboot.use_memfd=1",
+			"androidboot.hardware=redroid",
+			fmt.Sprintf("androidboot.redroid_width=%d", opts.Width),
+			fmt.Sprintf("androidboot.redroid_height=%d", opts.Height),
+			fmt.Sprintf("androidboot.redroid_dpi=%d", opts.DPI),
+		},
+		ExposedPorts: network.PortSet{
+			portKey: struct{}{},
+		},
+	}
+
+	resp, err := d.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
+		Config:     cfg,
+		HostConfig: hostConfig,
+		Name:       opts.Name,
+	})
+	if err != nil {
+		return "", err
+	}
+	if _, err := d.cli.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+type dockerClientInitError struct {
+	err error
+}
+
+func (d *dockerClientInitError) RemoveContainer(_ context.Context, _ string, _ bool) error {
+	return d.err
+}
+
+func (d *dockerClientInitError) RunContainer(_ context.Context, _ dockerRunOptions) (string, error) {
+	return "", d.err
+}
+
+func (d *dockerClientInitError) StopContainer(_ context.Context, _ string) error {
+	return d.err
 }

@@ -1,6 +1,7 @@
 package redroidmanager
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,18 +18,37 @@ func writeExecScript(t *testing.T, dir, name, body string) string {
 	return path
 }
 
+type fakeDockerClient struct {
+	removeCalls []string
+	stopCalls   []string
+	runCalls    []dockerRunOptions
+
+	runID string
+	err   error
+}
+
+func (f *fakeDockerClient) RemoveContainer(_ context.Context, name string, _ bool) error {
+	f.removeCalls = append(f.removeCalls, name)
+	return f.err
+}
+
+func (f *fakeDockerClient) RunContainer(_ context.Context, opts dockerRunOptions) (string, error) {
+	f.runCalls = append(f.runCalls, opts)
+	if f.runID == "" {
+		f.runID = "container-123"
+	}
+	return f.runID, f.err
+}
+
+func (f *fakeDockerClient) StopContainer(_ context.Context, name string) error {
+	f.stopCalls = append(f.stopCalls, name)
+	return f.err
+}
+
 func TestStartUntarsAndRunsContainer(t *testing.T) {
 	tmp := t.TempDir()
-	dockerLog := filepath.Join(tmp, "docker.log")
 	tarLog := filepath.Join(tmp, "tar.log")
 
-	docker := writeExecScript(t, tmp, "docker", `
-echo "$@" >> "`+dockerLog+`"
-if [ "$1" = "run" ]; then
-  echo "container-123"
-fi
-exit 0
-`)
 	tar := writeExecScript(t, tmp, "tar", `
 echo "$@" >> "`+tarLog+`"
 exit 0
@@ -40,11 +60,12 @@ exit 0
 		t.Fatalf("write data tar: %v", err)
 	}
 
+	fakeDocker := &fakeDockerClient{runID: "container-123"}
 	m := NewWithEnv(Environment{
-		DockerBin: docker,
-		TarBin:    tar,
-		ADBBin:    filepath.Join(tmp, "missing-adb"),
+		TarBin: tar,
+		ADBBin: filepath.Join(tmp, "missing-adb"),
 	})
+	m.docker = fakeDocker
 
 	containerID, err := m.Start(StartOptions{
 		Name:     "redroid15",
@@ -68,22 +89,15 @@ exit 0
 		t.Fatalf("unexpected tar args: %s", string(tarCmd))
 	}
 
-	dockerCmds, err := os.ReadFile(dockerLog)
-	if err != nil {
-		t.Fatalf("read docker log: %v", err)
+	if len(fakeDocker.removeCalls) != 1 || fakeDocker.removeCalls[0] != "redroid15" {
+		t.Fatalf("unexpected remove calls: %#v", fakeDocker.removeCalls)
 	}
-	log := string(dockerCmds)
-	if !strings.Contains(log, "rm -f redroid15") {
-		t.Fatalf("missing rm -f command: %s", log)
+	if len(fakeDocker.runCalls) != 1 {
+		t.Fatalf("expected one run call, got %#v", fakeDocker.runCalls)
 	}
-	if !strings.Contains(log, "run -d --name redroid15") {
-		t.Fatalf("missing docker run command: %s", log)
-	}
-	if !strings.Contains(log, "-p 5557:5555") {
-		t.Fatalf("missing port mapping: %s", log)
-	}
-	if !strings.Contains(log, "magsafe/redroid15gappsmagisk:latest") {
-		t.Fatalf("missing image: %s", log)
+	run := fakeDocker.runCalls[0]
+	if run.Name != "redroid15" || run.HostPort != 5557 {
+		t.Fatalf("unexpected run opts: %#v", run)
 	}
 }
 
@@ -134,10 +148,10 @@ exit 0
 `)
 
 	m := NewWithEnv(Environment{
-		ADBBin:    adb,
-		DockerBin: filepath.Join(tmp, "missing-docker"),
-		TarBin:    filepath.Join(tmp, "missing-tar"),
+		ADBBin: adb,
+		TarBin: filepath.Join(tmp, "missing-tar"),
 	})
+	m.docker = &fakeDockerClient{}
 
 	err := m.WaitForBoot(WaitOptions{
 		Serial:       "127.0.0.1:5555",
@@ -150,18 +164,10 @@ exit 0
 }
 
 func TestStopAndDelete(t *testing.T) {
-	tmp := t.TempDir()
-	dockerLog := filepath.Join(tmp, "docker.log")
-	docker := writeExecScript(t, tmp, "docker", `
-echo "$@" >> "`+dockerLog+`"
-exit 0
-`)
+	fakeDocker := &fakeDockerClient{}
+	m := NewWithEnv(Environment{})
+	m.docker = fakeDocker
 
-	m := NewWithEnv(Environment{
-		DockerBin: docker,
-		ADBBin:    filepath.Join(tmp, "missing-adb"),
-		TarBin:    filepath.Join(tmp, "missing-tar"),
-	})
 	if err := m.Stop("redroid15"); err != nil {
 		t.Fatalf("Stop() error: %v", err)
 	}
@@ -169,47 +175,22 @@ exit 0
 		t.Fatalf("Delete() error: %v", err)
 	}
 
-	cmds, err := os.ReadFile(dockerLog)
-	if err != nil {
-		t.Fatalf("read docker log: %v", err)
+	if len(fakeDocker.stopCalls) != 1 || fakeDocker.stopCalls[0] != "redroid15" {
+		t.Fatalf("unexpected stop calls: %#v", fakeDocker.stopCalls)
 	}
-	log := string(cmds)
-	if !strings.Contains(log, "stop redroid15") {
-		t.Fatalf("missing stop command: %s", log)
-	}
-	if !strings.Contains(log, "rm -f redroid15") {
-		t.Fatalf("missing rm command: %s", log)
+	if len(fakeDocker.removeCalls) != 1 || fakeDocker.removeCalls[0] != "redroid15" {
+		t.Fatalf("unexpected remove calls: %#v", fakeDocker.removeCalls)
 	}
 }
 
-func TestSSHTransport(t *testing.T) {
-	tmp := t.TempDir()
-	sshLog := filepath.Join(tmp, "ssh.log")
-	ssh := writeExecScript(t, tmp, "ssh", `
-echo "$@" > "`+sshLog+`"
-exit 0
-`)
-
-	m := NewWithEnv(Environment{
-		DockerBin: "docker",
-		ADBBin:    "adb",
-		TarBin:    "tar",
-		SSHTarget: "android@host",
-		SSHBin:    ssh,
-	})
-	if err := m.Delete("redroid15"); err != nil {
-		t.Fatalf("Delete() via ssh error: %v", err)
+func TestDockerHostFromEnv(t *testing.T) {
+	if got := dockerHostFromEnv(Environment{SSHTarget: "android@host"}); got != "ssh://android@host" {
+		t.Fatalf("dockerHostFromEnv ssh = %q", got)
 	}
-
-	args, err := os.ReadFile(sshLog)
-	if err != nil {
-		t.Fatalf("read ssh log: %v", err)
+	if got := dockerHostFromEnv(Environment{SSHTarget: "android@host", DockerHost: "unix:///var/run/docker.sock"}); got != "unix:///var/run/docker.sock" {
+		t.Fatalf("dockerHostFromEnv explicit host = %q", got)
 	}
-	got := string(args)
-	if !strings.Contains(got, "android@host") {
-		t.Fatalf("missing target in ssh args: %s", got)
-	}
-	if !strings.Contains(got, "sh -lc") || !strings.Contains(got, "docker") || !strings.Contains(got, "redroid15") {
-		t.Fatalf("unexpected ssh command framing: %s", got)
+	if got := dockerHostFromEnv(Environment{}); got != "" {
+		t.Fatalf("dockerHostFromEnv empty = %q", got)
 	}
 }

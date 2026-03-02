@@ -393,7 +393,6 @@ The library respects these environment variables (if not overridden):
 - `AVDCTL_CLONES_DIR` - Clones directory (optional)
 - `AVDCTL_CONFIG_TEMPLATE` - Path to custom `config.ini` template (optional)
 - `AVDCTL_SSH_TARGET` - Optional SSH target (e.g., `user@host`) for remote command execution
-- `AVDCTL_SSH_BIN` - Optional SSH binary path (default: `ssh`)
 - `AVDCTL_SSH_ARGS` - Optional extra SSH args (space-separated)
 
 ## Requirements

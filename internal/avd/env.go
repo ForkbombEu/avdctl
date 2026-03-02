@@ -23,7 +23,6 @@ type Env struct {
 	SdkManager string // sdkmanager
 	QemuImg    string // qemu-img
 	SSHTarget  string // AVDCTL_SSH_TARGET (optional, e.g. user@host)
-	SSHBin     string // AVDCTL_SSH_BIN (default: ssh)
 	SSHArgs    []string
 	// CorrelationID is used to tie logs to a specific workflow/activity.
 	CorrelationID string
@@ -46,7 +45,6 @@ func Detect() Env {
 	clns := getenv("AVDCTL_CLONES_DIR", filepath.Join(home, "avd-clones"))
 	tpl := os.Getenv("AVDCTL_CONFIG_TEMPLATE")
 	sshTarget := os.Getenv("AVDCTL_SSH_TARGET")
-	sshBin := getenv("AVDCTL_SSH_BIN", "ssh")
 	sshArgs := strings.Fields(os.Getenv("AVDCTL_SSH_ARGS"))
 	correlationID := getenv("AVDCTL_CORRELATION_ID", "")
 	if correlationID == "" {
@@ -65,7 +63,6 @@ func Detect() Env {
 		SdkManager:    "sdkmanager",
 		QemuImg:       "qemu-img",
 		SSHTarget:     sshTarget,
-		SSHBin:        sshBin,
 		SSHArgs:       sshArgs,
 		CorrelationID: correlationID,
 		Context:       context.Background(),

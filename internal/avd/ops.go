@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/forkbombeu/avdctl/internal/sshclient"
 	"go.opentelemetry.io/otel/attribute"
 )
 
@@ -37,36 +38,27 @@ const cloneFingerprintFilename = ".golden.fingerprint"
 // BootProgressFunc is called to report boot progress status.
 type BootProgressFunc func(status string, elapsed time.Duration)
 
-func attachCommandStderr(env Env, cmd *exec.Cmd, buf *bytes.Buffer) {
-	args := []string{}
-	if len(cmd.Args) > 1 {
-		args = cmd.Args[1:]
-	}
-	logWriter := newCommandLogWriter(env, cmd.Args[0], args)
+func commandStderrWriter(env Env, bin string, args []string, buf *bytes.Buffer) io.Writer {
+	logWriter := newCommandLogWriter(env, bin, args)
 	if buf != nil {
-		cmd.Stderr = io.MultiWriter(buf, logWriter)
-		return
+		return io.MultiWriter(buf, logWriter)
 	}
-	cmd.Stderr = logWriter
+	return logWriter
 }
 
 func run(env Env, bin string, args ...string) error {
-	cmd := command(env, bin, args...)
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	attachCommandStderr(env, cmd, &buf)
-	if err := cmd.Run(); err != nil {
+	errWriter := commandStderrWriter(env, bin, args, &buf)
+	if err := runCommandWithEnv(env.Context, env, nil, nil, &buf, errWriter, bin, args...); err != nil {
 		return fmt.Errorf("%s %v failed: %v\n%s", bin, args, err, buf.String())
 	}
 	return nil
 }
 
 func runWithContext(ctx context.Context, env Env, bin string, args ...string) error {
-	cmd := commandContext(ctx, env, bin, args...)
 	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	attachCommandStderr(env, cmd, &buf)
-	if err := cmd.Run(); err != nil {
+	errWriter := commandStderrWriter(env, bin, args, &buf)
+	if err := runCommandWithEnv(ctx, env, nil, nil, &buf, errWriter, bin, args...); err != nil {
 		return fmt.Errorf("%s %v failed: %v\n%s", bin, args, err, buf.String())
 	}
 	return nil
@@ -127,10 +119,8 @@ func InitBase(env Env, name, sysImage, device string) (Info, error) {
 	if err := ensureSysImg(env, sysImage); err != nil {
 		return Info{}, fmt.Errorf("failed to ensure system image: %w", err)
 	}
-	cmd := command(env, env.AvdMgr, "create", "avd",
+	out, err := runCommandCombinedOutputWithEnv(env.Context, env, nil, strings.NewReader("no\n"), env.AvdMgr, "create", "avd",
 		"-n", name, "-k", sysImage, "-d", device, "--force")
-	cmd.Stdin = strings.NewReader("no\n")
-	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return Info{}, fmt.Errorf("avdmanager create: %v\n%s", err, out)
 	}
@@ -522,7 +512,25 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 	}
 
 	args = append(args, extraArgs...)
-	cmd := commandWithEnv(env, []string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...)
+	if usesSSH(env) {
+		logPath := filepath.Join(os.TempDir(), fmt.Sprintf("emulator-%s.log", name))
+		pid, errOut, err := sshclient.RunDetachedArgs(
+			env.Context,
+			env.SSHTarget,
+			env.SSHArgs,
+			buildRemoteArgv([]string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...),
+			logPath,
+		)
+		if err != nil {
+			recordSpanError(span, err)
+			logEvent(env, "emulator start failed", "name", name, "error", err, "stderr", strings.TrimSpace(errOut), "log_path", logPath)
+			return nil, fmt.Errorf("emulator start: %w\n%s", err, strings.TrimSpace(errOut))
+		}
+		span.SetAttributes(attribute.Int("pid", pid), attribute.String("log_path", logPath))
+		logEvent(env, "emulator started", "name", name, "pid", pid, "log_path", logPath)
+		return nil, nil
+	}
+	cmd := commandWithEnv([]string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...)
 	cmd.Stderr = newLineLogWriterWithMessage(env, "emulator stderr", "name", name, "stream", "stderr")
 	if err := cmd.Start(); err != nil {
 		recordSpanError(span, err)
@@ -535,12 +543,8 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 }
 
 func GuessEmulatorSerial(env Env) (string, error) {
-	var buf bytes.Buffer
-	cmd := command(env, env.ADB, "devices")
-	cmd.Stdout = &buf
-	attachCommandStderr(env, cmd, nil)
-	_ = cmd.Run()
-	for _, line := range strings.Split(buf.String(), "\n") {
+	out, _, _ := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, "devices")
+	for _, line := range strings.Split(out, "\n") {
 		f := parseADBDeviceLine(line)
 		if len(f) >= 2 && strings.HasPrefix(f[0], "emulator-") && f[1] == "device" {
 			return f[0], nil
@@ -635,14 +639,19 @@ checkBoot:
 			return ctx.Err()
 		}
 
-		var out bytes.Buffer
-		var errOut bytes.Buffer
-		cmd := command(env, env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
-		cmd.Stdout = &out
-		attachCommandStderr(env, cmd, &errOut)
-		err := cmd.Run()
-
-		bootCompleted := strings.TrimSpace(out.String())
+		out, errOut, err := runCommandOutputWithEnv(
+			ctx,
+			env,
+			nil,
+			nil,
+			env.ADB,
+			"-s",
+			serial,
+			"shell",
+			"getprop",
+			"sys.boot_completed",
+		)
+		bootCompleted := strings.TrimSpace(out)
 		if bootCompleted == "1" {
 			time.Sleep(2 * time.Second)
 			span.SetAttributes(attribute.Bool("boot_completed", true))
@@ -659,7 +668,7 @@ checkBoot:
 		}
 
 		if err != nil {
-			lastError = errOut.String()
+			lastError = errOut
 			if lastError == "" {
 				lastError = err.Error()
 			}
@@ -695,17 +704,13 @@ checkBoot:
 }
 
 func KillEmulator(env Env, serial string) {
-	cmd := command(env, env.ADB, "-s", serial, "emu", "kill")
-	attachCommandStderr(env, cmd, nil)
-	_ = cmd.Run()
+	_ = run(env, env.ADB, "-s", serial, "emu", "kill")
 	time.Sleep(1 * time.Second)
 }
 
 func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout time.Duration) (string, int64, error) {
 	// Restart ADB server to clear stale state
-	killCmd := command(env, env.ADB, "kill-server")
-	attachCommandStderr(env, killCmd, nil)
-	_ = killCmd.Run()
+	_ = run(env, env.ADB, "kill-server")
 	time.Sleep(1 * time.Second)
 	ensureADB(env)
 
@@ -718,7 +723,11 @@ func PrewarmGolden(env Env, name, dest string, extra time.Duration, bootTimeout 
 	if err != nil {
 		return "", 0, err
 	}
-	defer func() { _ = cmd.Process.Kill() }()
+	defer func() {
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}()
 
 	// Wait until adb sees that specific emulator serial
 	if err := waitForEmulatorSerial(env, serial, 60*time.Second); err != nil {
@@ -794,7 +803,11 @@ func BakeAPK(env Env, base, name, golden string, apks []string, timeout time.Dur
 	if err != nil {
 		return "", 0, err
 	}
-	defer func() { _ = cmd.Process.Kill() }()
+	defer func() {
+		if cmd != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+	}()
 
 	serial, err := GuessEmulatorSerial(env)
 	if err != nil {
@@ -964,7 +977,56 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 	}
 
 	args = append(args, extraArgs...)
-	cmd := commandWithEnv(env, []string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...)
+	if usesSSH(env) {
+		_ = logFile.Close()
+		pid, errOut, err := sshclient.RunDetachedArgs(
+			env.Context,
+			env.SSHTarget,
+			env.SSHArgs,
+			buildRemoteArgv([]string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...),
+			logPath,
+		)
+		if err != nil {
+			recordSpanError(span, err)
+			logEvent(
+				env,
+				"emulator start failed",
+				"name",
+				name,
+				"port",
+				port,
+				"error",
+				err,
+				"stderr",
+				strings.TrimSpace(errOut),
+				"log_path",
+				logPath,
+			)
+			return nil, "", "", fmt.Errorf("emulator start: %w\n%s", err, strings.TrimSpace(errOut))
+		}
+		serial := fmt.Sprintf("emulator-%d", port)
+		span.SetAttributes(
+			attribute.String("serial", serial),
+			attribute.Int("pid", pid),
+			attribute.String("log_path", logPath),
+		)
+		logEvent(
+			env,
+			"emulator started",
+			"name",
+			name,
+			"port",
+			port,
+			"serial",
+			serial,
+			"pid",
+			pid,
+			"log_path",
+			logPath,
+		)
+		return nil, serial, logPath, nil
+	}
+	cmd := commandWithEnv([]string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...)
 	cmd.Stdout = io.MultiWriter(logFile, stdoutWriter)
 	cmd.Stderr = io.MultiWriter(logFile, stderrWriter)
 
@@ -1012,12 +1074,8 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 func waitForEmulatorSerial(env Env, serial string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		var buf bytes.Buffer
-		c := command(env, env.ADB, "devices")
-		c.Stdout = &buf
-		attachCommandStderr(env, c, nil)
-		_ = c.Run()
-		for _, line := range strings.Split(buf.String(), "\n") {
+		out, _, _ := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, "devices")
+		for _, line := range strings.Split(out, "\n") {
 			f := parseADBDeviceLine(line)
 			if len(f) >= 2 && f[0] == serial {
 				return nil // seen (status can be 'device' or 'offline'; WaitForBoot will handle readiness)
@@ -1029,15 +1087,11 @@ func waitForEmulatorSerial(env Env, serial string, timeout time.Duration) error 
 }
 
 func isSerialVisible(env Env, serial string) (bool, error) {
-	var buf bytes.Buffer
-	cmd := command(env, env.ADB, "devices")
-	cmd.Stdout = &buf
-	var errBuf bytes.Buffer
-	attachCommandStderr(env, cmd, &errBuf)
-	if err := cmd.Run(); err != nil {
+	out, _, err := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, "devices")
+	if err != nil {
 		return false, fmt.Errorf("adb devices failed: %w", err)
 	}
-	for _, line := range strings.Split(buf.String(), "\n") {
+	for _, line := range strings.Split(out, "\n") {
 		fields := parseADBDeviceLine(line)
 		if len(fields) >= 2 && fields[0] == serial {
 			return true, nil
@@ -1101,12 +1155,8 @@ func FindFreeEvenPortWithEnv(env Env, start, end int) (int, error) {
 
 // GetAVDNameFromSerial asks the emulator console for the AVD name.
 func GetAVDNameFromSerial(env Env, serial string) (string, error) {
-	var buf bytes.Buffer
-	cmd := command(env, env.ADB, "-s", serial, "emu", "avd", "name")
-	cmd.Stdout = &buf
-	attachCommandStderr(env, cmd, nil)
-	_ = cmd.Run()
-	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	out, _, _ := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, "-s", serial, "emu", "avd", "name")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
 	if len(lines) == 0 {
 		return "", nil
 	}
@@ -1139,13 +1189,8 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 	seen := make(map[int]bool)
 
 	// Strategy 1: Get emulators from adb devices (may not show all if just started)
-	var out bytes.Buffer
-	c := command(env, env.ADB, "devices")
-	c.Stdout = &out
-	attachCommandStderr(env, c, nil)
-	_ = c.Run()
-
-	for _, line := range strings.Split(out.String(), "\n") {
+	out, _, _ := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, "devices")
+	for _, line := range strings.Split(out, "\n") {
 		f := parseADBDeviceLine(line)
 		if len(f) >= 2 && strings.HasPrefix(f[0], "emulator-") {
 			serial := f[0]
@@ -1173,12 +1218,19 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 
 			boot := false
 			// quick boot check using explicit serial
-			var b bytes.Buffer
-			cmd := command(env, env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
-			cmd.Stdout = &b
-			attachCommandStderr(env, cmd, nil)
-			_ = cmd.Run()
-			if strings.TrimSpace(b.String()) == "1" {
+			bootOut, _, _ := runCommandOutputWithEnv(
+				env.Context,
+				env,
+				nil,
+				nil,
+				env.ADB,
+				"-s",
+				serial,
+				"shell",
+				"getprop",
+				"sys.boot_completed",
+			)
+			if strings.TrimSpace(bootOut) == "1" {
 				boot = true
 			}
 			procs = append(procs, ProcInfo{Serial: serial, Name: name, Port: port, PID: pid, Booted: boot})
@@ -1211,12 +1263,19 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 
 			// Try to check boot status
 			boot := false
-			var b bytes.Buffer
-			cmd := command(env, env.ADB, "-s", serial, "shell", "getprop", "sys.boot_completed")
-			cmd.Stdout = &b
-			var errBuf bytes.Buffer
-			attachCommandStderr(env, cmd, &errBuf)
-			if cmd.Run() == nil && strings.TrimSpace(b.String()) == "1" {
+			bootOut, _, bootErr := runCommandOutputWithEnv(
+				env.Context,
+				env,
+				nil,
+				nil,
+				env.ADB,
+				"-s",
+				serial,
+				"shell",
+				"getprop",
+				"sys.boot_completed",
+			)
+			if bootErr == nil && strings.TrimSpace(bootOut) == "1" {
 				boot = true
 			}
 
@@ -1533,10 +1592,7 @@ func killAllViaADB(env Env, maxPasses int, delay time.Duration) (KillAllEmulator
 
 		report.Passes = pass + 1
 		for _, proc := range procs {
-			cmd := command(env, env.ADB, "-s", proc.Serial, "emu", "kill")
-			var errBuf bytes.Buffer
-			attachCommandStderr(env, cmd, &errBuf)
-			_ = cmd.Run()
+			_ = run(env, env.ADB, "-s", proc.Serial, "emu", "kill")
 		}
 
 		if pass < maxPasses-1 {
@@ -1664,12 +1720,26 @@ func CustomizeStart(env Env, name string) (string, error) {
 	_ = os.RemoveAll(filepath.Join(avdDir, "snapshots"))
 
 	logPath := filepath.Join(os.TempDir(), fmt.Sprintf("emulator-%s-customize.log", name))
+	if usesSSH(env) {
+		args := []string{"-avd", name, "-no-snapshot-load", "-no-snapshot-save"}
+		_, errOut, err := sshclient.RunDetachedArgs(
+			env.Context,
+			env.SSHTarget,
+			env.SSHArgs,
+			buildRemoteArgv([]string{"QEMU_FILE_LOCKING=off"}, env.Emulator, args...),
+			logPath,
+		)
+		if err != nil {
+			return "", fmt.Errorf("emulator start: %w\n%s", err, strings.TrimSpace(errOut))
+		}
+		return logPath, nil
+	}
 	lf, err := os.Create(logPath)
 	if err != nil {
 		return "", fmt.Errorf("open log: %w", err)
 	}
 	args := []string{"-avd", name, "-no-snapshot-load", "-no-snapshot-save"}
-	cmd := commandWithEnv(env, []string{"QEMU_FILE_LOCKING=off"}, env.Emulator, args...)
+	cmd := commandWithEnv([]string{"QEMU_FILE_LOCKING=off"}, env.Emulator, args...)
 	stdoutWriter := newLineLogWriterWithMessage(env, "emulator stdout", "name", name, "log_path", logPath, "stream", "stdout")
 	stderrWriter := newLineLogWriterWithMessage(env, "emulator stderr", "name", name, "log_path", logPath, "stream", "stderr")
 	cmd.Stdout = io.MultiWriter(lf, stdoutWriter)
@@ -1724,11 +1794,8 @@ func StopBySerial(env Env, serial string) error {
 	logEvent(env, "emulator stop requested", "serial", serial, "port", port)
 
 	// Try graceful shutdown via adb first
-	cmd := command(env, env.ADB, "-s", serial, "emu", "kill")
-	var errBuf bytes.Buffer
-	attachCommandStderr(env, cmd, &errBuf)
-	adbErr := cmd.Run()
-	adbOutput := strings.TrimSpace(errBuf.String())
+	_, errOut, adbErr := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, "-s", serial, "emu", "kill")
+	adbOutput := strings.TrimSpace(errOut)
 
 	serialGone := false
 	deadline := time.Now().Add(10 * time.Second)
@@ -1833,14 +1900,12 @@ func StopBluetooth(env Env, serial string) error {
 	}
 
 	for _, cmdDef := range commands {
-		cmd := command(env, env.ADB, cmdDef.args...)
-		var errBuf bytes.Buffer
-		attachCommandStderr(env, cmd, &errBuf)
-		if err := cmd.Run(); err != nil {
+		_, errOut, err := runCommandOutputWithEnv(env.Context, env, nil, nil, env.ADB, cmdDef.args...)
+		if err != nil {
 			if cmdDef.required {
 				recordSpanError(span, err)
 				logEvent(env, "bluetooth disable command failed", "serial", serial, "command", cmdDef.desc, "error", err)
-				return fmt.Errorf("failed to %s: %w\nOutput: %s", cmdDef.desc, err, errBuf.String())
+				return fmt.Errorf("failed to %s: %w\nOutput: %s", cmdDef.desc, err, errOut)
 			}
 			logEvent(env, "optional bluetooth command failed", "serial", serial, "command", cmdDef.desc, "error", err)
 		}

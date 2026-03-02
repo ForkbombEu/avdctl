@@ -73,7 +73,6 @@ func NewWithEnv(env Environment) *Manager {
 			SdkManager:    env.SdkManagerBin,
 			QemuImg:       env.QemuImgBin,
 			SSHTarget:     env.SSHTarget,
-			SSHBin:        env.SSHBin,
 			SSHArgs:       env.SSHArgs,
 			CorrelationID: env.CorrelationID,
 			Context:       ctx,
@@ -149,7 +148,6 @@ type Environment struct {
 	SdkManagerBin  string          // Path to sdkmanager binary (default: "sdkmanager")
 	QemuImgBin     string          // Path to qemu-img binary (default: "qemu-img")
 	SSHTarget      string          // Optional SSH target (user@host) for remote command execution
-	SSHBin         string          // Path to ssh binary (default: "ssh")
 	SSHArgs        []string        // Optional extra ssh args (e.g. []string{"-i", "~/.ssh/key"})
 	CorrelationID  string          // Correlation ID for log enrichment
 	Context        context.Context // Context for tracing

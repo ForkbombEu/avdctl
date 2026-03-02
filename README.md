@@ -76,7 +76,6 @@ export AVDCTL_SSH_ARGS="-p 2222 -o BatchMode=yes"     # Optional: extra ssh args
 All CLI subcommands also support:
 
 - `--ssh user@host`
-- `--ssh-bin /path/to/ssh`
 - `--ssh-arg <value>` (repeatable)
 
 When `--ssh` is enabled, `avdctl` delegates the whole command to a remote `avdctl`

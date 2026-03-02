@@ -80,7 +80,6 @@ func TestVersionCommandFallsBackToDev(t *testing.T) {
 func TestStripSSHFlags(t *testing.T) {
 	in := []string{
 		"--ssh", "user@host",
-		"--ssh-bin=/usr/bin/ssh",
 		"--ssh-arg", "-o",
 		"--ssh-arg=BatchMode=yes",
 		"run", "--name", "demo",

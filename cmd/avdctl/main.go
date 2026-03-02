@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -17,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
+	"github.com/forkbombeu/avdctl/internal/sshclient"
 	"github.com/forkbombeu/avdctl/pkg/avdmanager"
 	"github.com/forkbombeu/avdctl/pkg/redroidmanager"
 )
@@ -48,7 +48,6 @@ func main() {
 	}
 	env := core.Detect()
 	var sshTarget string
-	var sshBin string
 	var sshArgs []string
 
 	root := &cobra.Command{
@@ -59,16 +58,13 @@ func main() {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if shouldDelegateOverSSH(cmd, sshTarget) {
 				remoteArgs := stripSSHFlags(os.Args[1:])
-				if err := runRemoteAVDCtl(sshBin, sshTarget, sshArgs, remoteArgs); err != nil {
+				if err := runRemoteAVDCtl(sshTarget, sshArgs, remoteArgs); err != nil {
 					return err
 				}
 				return errRemoteDelegated
 			}
 			if sshTarget != "" {
 				env.SSHTarget = sshTarget
-			}
-			if sshBin != "" {
-				env.SSHBin = sshBin
 			}
 			if len(sshArgs) > 0 {
 				env.SSHArgs = append([]string(nil), sshArgs...)
@@ -77,7 +73,6 @@ func main() {
 		},
 	}
 	root.PersistentFlags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) to run tool commands remotely")
-	root.PersistentFlags().StringVar(&sshBin, "ssh-bin", "", "SSH binary path (default: ssh)")
 	root.PersistentFlags().StringArrayVar(&sshArgs, "ssh-arg", nil, "Extra ssh args (repeatable, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key)")
 
 	versionCmd := &cobra.Command{
@@ -720,25 +715,18 @@ func shouldDelegateOverSSH(cmd *cobra.Command, sshTarget string) bool {
 	return true
 }
 
-func runRemoteAVDCtl(sshBin, sshTarget string, sshArgs, avdArgs []string) error {
-	if strings.TrimSpace(sshBin) == "" {
-		sshBin = "ssh"
-	}
+func runRemoteAVDCtl(sshTarget string, sshArgs, avdArgs []string) error {
 	remoteArgs := append([]string{"avdctl"}, avdArgs...)
-	remoteCommand := shellJoin(remoteArgs)
-
-	args := make([]string, 0, len(sshArgs)+3)
-	if shouldAllocateTTY(sshArgs) {
-		args = append(args, "-tt")
-	}
-	args = append(args, sshArgs...)
-	args = append(args, sshTarget, sshRemoteCommand(remoteCommand))
-
-	cmd := exec.Command(sshBin, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
+	return sshclient.RunArgs(
+		context.Background(),
+		sshTarget,
+		sshArgs,
+		remoteArgs,
+		os.Stdin,
+		os.Stdout,
+		os.Stderr,
+		shouldAllocateTTY(sshArgs),
+	)
 }
 
 func shouldAllocateTTY(sshArgs []string) bool {
@@ -770,12 +758,11 @@ func stripSSHFlags(args []string) []string {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "--ssh" || arg == "--ssh-bin" || arg == "--ssh-arg":
+		case arg == "--ssh" || arg == "--ssh-arg":
 			if i+1 < len(args) {
 				i++
 			}
 		case strings.HasPrefix(arg, "--ssh="),
-			strings.HasPrefix(arg, "--ssh-bin="),
 			strings.HasPrefix(arg, "--ssh-arg="):
 			continue
 		default:
@@ -783,23 +770,4 @@ func stripSSHFlags(args []string) []string {
 		}
 	}
 	return out
-}
-
-func shellJoin(args []string) string {
-	quoted := make([]string, 0, len(args))
-	for _, arg := range args {
-		quoted = append(quoted, shellQuote(arg))
-	}
-	return strings.Join(quoted, " ")
-}
-
-func sshRemoteCommand(command string) string {
-	return "sh -lc " + shellQuote(command)
-}
-
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

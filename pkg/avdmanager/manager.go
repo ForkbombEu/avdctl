@@ -28,6 +28,7 @@ type Manager struct {
 }
 
 var managerTracer = otel.Tracer("avdctl/manager")
+var remoteRunOutput = remoteavdctl.RunOutput
 
 // New creates a new AVD Manager with auto-detected environment.
 func New() *Manager {
@@ -717,7 +718,7 @@ func (m *Manager) runRemote(args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	out, errOut, err := remoteavdctl.RunOutput(ctx, m.env.SSHTarget, m.env.SSHArgs, args)
+	out, errOut, err := remoteRunOutput(ctx, m.env.SSHTarget, m.env.SSHArgs, args)
 	if err != nil {
 		return "", fmt.Errorf("remote avdctl %v failed: %w\n%s", args, err, strings.TrimSpace(errOut))
 	}

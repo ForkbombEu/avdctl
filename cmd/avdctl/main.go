@@ -16,7 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
-	"github.com/forkbombeu/avdctl/internal/sshclient"
+	"github.com/forkbombeu/avdctl/internal/remoteavdctl"
 	"github.com/forkbombeu/avdctl/pkg/avdmanager"
 	"github.com/forkbombeu/avdctl/pkg/redroidmanager"
 )
@@ -47,8 +47,8 @@ func main() {
 		}()
 	}
 	env := core.Detect()
-	var sshTarget string
-	var sshArgs []string
+	sshTarget := strings.TrimSpace(env.SSHTarget)
+	sshArgs := append([]string(nil), env.SSHArgs...)
 
 	root := &cobra.Command{
 		Use:           "avdctl",
@@ -63,17 +63,11 @@ func main() {
 				}
 				return errRemoteDelegated
 			}
-			if sshTarget != "" {
-				env.SSHTarget = sshTarget
-			}
-			if len(sshArgs) > 0 {
-				env.SSHArgs = append([]string(nil), sshArgs...)
-			}
 			return nil
 		},
 	}
 	root.PersistentFlags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) to run tool commands remotely")
-	root.PersistentFlags().StringArrayVar(&sshArgs, "ssh-arg", nil, "Extra ssh args (repeatable, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key)")
+	root.PersistentFlags().StringArrayVar(&sshArgs, "ssh-arg", sshArgs, "Extra ssh args (repeatable, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key)")
 
 	versionCmd := &cobra.Command{
 		Use:   "version",
@@ -717,12 +711,11 @@ func shouldDelegateOverSSH(cmd *cobra.Command, sshTarget string) bool {
 }
 
 func runRemoteAVDCtl(sshTarget string, sshArgs, avdArgs []string) error {
-	remoteArgs := append([]string{"avdctl"}, avdArgs...)
-	return sshclient.RunArgs(
+	return remoteavdctl.Run(
 		context.Background(),
 		sshTarget,
 		sshArgs,
-		remoteArgs,
+		avdArgs,
 		os.Stdin,
 		os.Stdout,
 		os.Stderr,

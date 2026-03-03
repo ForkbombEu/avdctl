@@ -7,11 +7,16 @@ package avdmanager
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/forkbombeu/avdctl/internal/avd"
+	"github.com/forkbombeu/avdctl/internal/remoteavdctl"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -23,6 +28,7 @@ type Manager struct {
 }
 
 var managerTracer = otel.Tracer("avdctl/manager")
+var remoteRunOutput = remoteavdctl.RunOutput
 
 // New creates a new AVD Manager with auto-detected environment.
 func New() *Manager {
@@ -110,6 +116,10 @@ func (m *Manager) withContext(ctx context.Context) avd.Env {
 		env.Context = ctx
 	}
 	return env
+}
+
+func (m *Manager) usesRemote() bool {
+	return strings.TrimSpace(m.env.SSHTarget) != ""
 }
 
 func (m *Manager) ensureNotRunning(name string) error {
@@ -233,6 +243,13 @@ type KillAllEmulatorsReport struct {
 
 // InitBase creates a new base AVD. Auto-installs system image if missing.
 func (m *Manager) InitBase(opts InitBaseOptions) (AVDInfo, error) {
+	if m.usesRemote() {
+		args := []string{"init-base", "--name", opts.Name, "--image", opts.SystemImage, "--device", opts.Device}
+		if _, err := m.runRemote(args...); err != nil {
+			return AVDInfo{}, err
+		}
+		return m.findAVDInfo(opts.Name)
+	}
 	info, err := avd.InitBase(m.env, opts.Name, opts.SystemImage, opts.Device)
 	if err != nil {
 		return AVDInfo{}, err
@@ -252,6 +269,19 @@ func (m *Manager) Clone(opts CloneOptions) (AVDInfo, error) {
 		attribute.String("avd_name", opts.CloneName),
 	)
 	defer span.End()
+	if m.usesRemote() {
+		_, err := m.runRemote(
+			"clone",
+			"--base", opts.BaseName,
+			"--name", opts.CloneName,
+			"--golden", opts.GoldenPath,
+		)
+		recordSpanError(span, err)
+		if err != nil {
+			return AVDInfo{}, err
+		}
+		return m.findAVDInfo(opts.CloneName)
+	}
 	info, err := avd.CloneFromGolden(m.withContext(ctx), opts.BaseName, opts.CloneName, opts.GoldenPath)
 	recordSpanError(span, err)
 	if err != nil {
@@ -272,6 +302,24 @@ func (m *Manager) Run(opts RunOptions) (string, error) {
 		attribute.String("avd_name", opts.Name),
 	)
 	defer span.End()
+	if m.usesRemote() {
+		if err := m.ensureNotRunning(opts.Name); err != nil {
+			recordSpanError(span, err)
+			return "", err
+		}
+		out, err := m.runRemote("run", "--name", opts.Name)
+		recordSpanError(span, err)
+		if err != nil {
+			return "", err
+		}
+		serial, _, parseErr := parseStartedLine(out)
+		recordSpanError(span, parseErr)
+		if parseErr != nil {
+			return "", parseErr
+		}
+		span.SetAttributes(attribute.String("serial", serial))
+		return serial, nil
+	}
 	if err := m.ensureNotRunning(opts.Name); err != nil {
 		recordSpanError(span, err)
 		return "", err
@@ -293,15 +341,7 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 	)
 	defer span.End()
 	if opts.Port == 0 {
-		if err := m.ensureNotRunning(opts.Name); err != nil {
-			recordSpanError(span, err)
-			return "", "", err
-		}
-		serial, err = avd.RunAVD(m.withContext(ctx), opts.Name)
-		recordSpanError(span, err)
-		if err == nil {
-			span.SetAttributes(attribute.String("serial", serial))
-		}
+		serial, err = m.Run(opts)
 		return serial, "", err
 	}
 	if err := m.ensureNotRunning(opts.Name); err != nil {
@@ -326,6 +366,20 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 			break
 		}
 	}
+	if m.usesRemote() {
+		out, runErr := m.runRemote("run", "--name", opts.Name, "--port", strconv.Itoa(port))
+		recordSpanError(span, runErr)
+		if runErr != nil {
+			return "", "", runErr
+		}
+		serial, logPath, parseErr := parseStartedLine(out)
+		recordSpanError(span, parseErr)
+		if parseErr != nil {
+			return "", "", parseErr
+		}
+		span.SetAttributes(attribute.String("serial", serial))
+		return serial, logPath, nil
+	}
 
 	_, serial, logPath, err = avd.StartEmulatorOnPort(m.withContext(ctx), opts.Name, port)
 	recordSpanError(span, err)
@@ -337,6 +391,13 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 
 // List returns all AVDs under ANDROID_AVD_HOME.
 func (m *Manager) List() ([]AVDInfo, error) {
+	if m.usesRemote() {
+		var infos []AVDInfo
+		if err := m.runRemoteJSON(&infos, "list", "--json"); err != nil {
+			return nil, err
+		}
+		return infos, nil
+	}
 	infos, err := avd.List(m.env)
 	if err != nil {
 		return nil, err
@@ -355,6 +416,13 @@ func (m *Manager) List() ([]AVDInfo, error) {
 
 // ListRunning returns all currently running emulator instances.
 func (m *Manager) ListRunning() ([]ProcessInfo, error) {
+	if m.usesRemote() {
+		var procs []ProcessInfo
+		if err := m.runRemoteJSON(&procs, "ps", "--json"); err != nil {
+			return nil, err
+		}
+		return procs, nil
+	}
 	procs, err := avd.ListRunning(m.env)
 	if err != nil {
 		return nil, err
@@ -379,6 +447,11 @@ func (m *Manager) Stop(serial string) error {
 		attribute.String("serial", serial),
 	)
 	defer span.End()
+	if m.usesRemote() {
+		_, err := m.runRemote("stop", "--serial", serial)
+		recordSpanError(span, err)
+		return err
+	}
 	err := avd.StopBySerial(m.withContext(ctx), serial)
 	recordSpanError(span, err)
 	return err
@@ -391,6 +464,11 @@ func (m *Manager) StopBluetooth(serial string) error {
 		attribute.String("serial", serial),
 	)
 	defer span.End()
+	if m.usesRemote() {
+		_, err := m.runRemote("stop-bluetooth", "--serial", serial)
+		recordSpanError(span, err)
+		return err
+	}
 	err := avd.StopBluetooth(m.withContext(ctx), serial)
 	recordSpanError(span, err)
 	return err
@@ -398,6 +476,10 @@ func (m *Manager) StopBluetooth(serial string) error {
 
 // StopByName stops a running emulator by AVD name.
 func (m *Manager) StopByName(name string) error {
+	if m.usesRemote() {
+		_, err := m.runRemote("stop", "--name", name)
+		return err
+	}
 	procs, err := avd.ListRunning(m.env)
 	if err != nil {
 		return err
@@ -418,6 +500,44 @@ func (m *Manager) KillAllEmulators(opts KillAllEmulatorsOptions) (KillAllEmulato
 		attribute.String("delay", opts.Delay.String()),
 	)
 	defer span.End()
+	if m.usesRemote() {
+		if opts.MaxPasses <= 0 {
+			opts.MaxPasses = 5
+		}
+		if opts.Delay <= 0 {
+			opts.Delay = 500 * time.Millisecond
+		}
+		report := KillAllEmulatorsReport{}
+		for pass := 0; pass < opts.MaxPasses; pass++ {
+			procs, listErr := m.ListRunning()
+			if listErr != nil {
+				recordSpanError(span, listErr)
+				return KillAllEmulatorsReport{}, listErr
+			}
+			if len(procs) == 0 {
+				report.Passes = pass
+				report.Remaining = 0
+				return report, nil
+			}
+			report.Passes = pass + 1
+			for _, proc := range procs {
+				_ = m.Stop(proc.Serial)
+				if proc.PID > 0 {
+					report.KilledPIDs = append(report.KilledPIDs, proc.PID)
+				}
+			}
+			if pass < opts.MaxPasses-1 {
+				time.Sleep(opts.Delay)
+			}
+		}
+		procs, listErr := m.ListRunning()
+		if listErr != nil {
+			recordSpanError(span, listErr)
+			return KillAllEmulatorsReport{}, listErr
+		}
+		report.Remaining = len(procs)
+		return report, nil
+	}
 
 	report, err := avd.KillAllEmulators(m.withContext(ctx), opts.MaxPasses, opts.Delay)
 	recordSpanError(span, err)
@@ -434,11 +554,26 @@ func (m *Manager) KillAllEmulators(opts KillAllEmulatorsOptions) (KillAllEmulato
 
 // Delete removes an AVD (both .avd directory and .ini file).
 func (m *Manager) Delete(name string) error {
+	if m.usesRemote() {
+		_, err := m.runRemote("delete", name)
+		return err
+	}
 	return avd.Delete(m.env, name)
 }
 
 // SaveGolden exports an AVD's userdata to a compressed QCOW2 golden image.
 func (m *Manager) SaveGolden(opts SaveGoldenOptions) (path string, sizeBytes int64, err error) {
+	if m.usesRemote() {
+		args := []string{"save-golden", "--name", opts.Name}
+		if strings.TrimSpace(opts.Destination) != "" {
+			args = append(args, "--dest", opts.Destination)
+		}
+		out, runErr := m.runRemote(args...)
+		if runErr != nil {
+			return "", 0, runErr
+		}
+		return parsePathAndSize(out, "Golden saved")
+	}
 	return avd.SaveGolden(m.env, opts.Name, opts.Destination)
 }
 
@@ -451,6 +586,22 @@ func (m *Manager) Prewarm(opts PrewarmOptions) (path string, sizeBytes int64, er
 	if opts.BootTimeout == 0 {
 		opts.BootTimeout = 3 * time.Minute
 	}
+	if m.usesRemote() {
+		args := []string{
+			"prewarm",
+			"--name", opts.Name,
+			"--extra", opts.ExtraSettle.String(),
+			"--timeout", opts.BootTimeout.String(),
+		}
+		if strings.TrimSpace(opts.Destination) != "" {
+			args = append(args, "--dest", opts.Destination)
+		}
+		out, runErr := m.runRemote(args...)
+		if runErr != nil {
+			return "", 0, runErr
+		}
+		return parsePathAndSize(out, "Prewarmed golden saved")
+	}
 	return avd.PrewarmGolden(m.env, opts.Name, opts.Destination, opts.ExtraSettle, opts.BootTimeout)
 }
 
@@ -458,6 +609,25 @@ func (m *Manager) Prewarm(opts PrewarmOptions) (path string, sizeBytes int64, er
 func (m *Manager) BakeAPK(opts BakeAPKOptions) (clonePath string, cloneSize int64, err error) {
 	if opts.BootTimeout == 0 {
 		opts.BootTimeout = 3 * time.Minute
+	}
+	if m.usesRemote() {
+		args := []string{
+			"bake-apk",
+			"--base", opts.BaseName,
+			"--name", opts.CloneName,
+			"--golden", opts.GoldenPath,
+		}
+		for _, apk := range opts.APKPaths {
+			args = append(args, "--apk", apk)
+		}
+		if strings.TrimSpace(opts.Destination) != "" {
+			args = append(args, "--dest", opts.Destination)
+		}
+		out, runErr := m.runRemote(args...)
+		if runErr != nil {
+			return "", 0, runErr
+		}
+		return parsePathAndSize(out, "Baked clone at")
 	}
 	return avd.BakeAPK(m.env, opts.BaseName, opts.CloneName, opts.GoldenPath, opts.APKPaths, opts.BootTimeout)
 }
@@ -478,6 +648,28 @@ func (m *Manager) WaitForBootWithProgress(
 		attribute.String("serial", serial),
 	)
 	defer span.End()
+	if m.usesRemote() {
+		start := time.Now()
+		deadline := start.Add(timeout)
+		for time.Now().Before(deadline) {
+			if progress != nil {
+				progress("checking_bootanim", time.Since(start))
+			}
+			procs, err := m.ListRunning()
+			if err == nil {
+				for _, proc := range procs {
+					if proc.Serial == serial && proc.Booted {
+						if progress != nil {
+							progress("boot_complete", time.Since(start))
+						}
+						return nil
+					}
+				}
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		return fmt.Errorf("boot timeout after %s (serial %s not ready)", timeout, serial)
+	}
 	err := avd.WaitForBootWithProgress(
 		m.withContext(ctx),
 		serial,
@@ -495,5 +687,106 @@ func (m *Manager) WaitForBootWithProgress(
 
 // FindFreePort finds a free even port pair for emulator (uses port and port+1).
 func (m *Manager) FindFreePort(start, end int) (int, error) {
+	if m.usesRemote() {
+		if start%2 != 0 {
+			start++
+		}
+		procs, err := m.ListRunning()
+		if err != nil {
+			return 0, err
+		}
+		used := make(map[int]bool, len(procs)*2)
+		for _, proc := range procs {
+			if proc.Port > 0 {
+				used[proc.Port] = true
+				used[proc.Port+1] = true
+			}
+		}
+		for p := start; p < end; p += 2 {
+			if used[p] || used[p+1] {
+				continue
+			}
+			return p, nil
+		}
+		return 0, fmt.Errorf("no free even port found in %d..%d", start, end)
+	}
 	return avd.FindFreeEvenPortWithEnv(m.env, start, end)
+}
+
+func (m *Manager) runRemote(args ...string) (string, error) {
+	ctx := m.env.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	out, errOut, err := remoteRunOutput(ctx, m.env.SSHTarget, m.env.SSHArgs, args)
+	if err != nil {
+		return "", fmt.Errorf("remote avdctl %v failed: %w\n%s", args, err, strings.TrimSpace(errOut))
+	}
+	return out, nil
+}
+
+func (m *Manager) runRemoteJSON(dst any, args ...string) error {
+	out, err := m.runRemote(args...)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal([]byte(out), dst); err != nil {
+		return fmt.Errorf("decode remote json output for %v: %w", args, err)
+	}
+	return nil
+}
+
+func (m *Manager) findAVDInfo(name string) (AVDInfo, error) {
+	infos, err := m.List()
+	if err != nil {
+		return AVDInfo{}, err
+	}
+	for _, info := range infos {
+		if info.Name == name {
+			return info, nil
+		}
+	}
+	return AVDInfo{}, fmt.Errorf("avd %q not found after command completion", name)
+}
+
+var startedLineRe = regexp.MustCompile(`Started\s+\S+\s+on\s+(emulator-\d+)(?:\s+\(log:\s*([^)]+)\))?`)
+var sizeSuffixRe = regexp.MustCompile(`\((\d+)\s+bytes\)$`)
+
+func parseStartedLine(out string) (serial string, logPath string, err error) {
+	m := startedLineRe.FindStringSubmatch(out)
+	if len(m) == 0 {
+		return "", "", fmt.Errorf("failed to parse serial from output: %q", strings.TrimSpace(out))
+	}
+	if len(m) > 1 {
+		serial = strings.TrimSpace(m[1])
+	}
+	if len(m) > 2 {
+		logPath = strings.TrimSpace(m[2])
+	}
+	if serial == "" {
+		return "", "", fmt.Errorf("failed to parse serial from output: %q", strings.TrimSpace(out))
+	}
+	return serial, logPath, nil
+}
+
+func parsePathAndSize(out string, prefix string) (path string, sizeBytes int64, err error) {
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.HasPrefix(line, prefix) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, ":"))
+		m := sizeSuffixRe.FindStringSubmatch(rest)
+		if len(m) != 2 {
+			continue
+		}
+		size, convErr := strconv.ParseInt(strings.TrimSpace(m[1]), 10, 64)
+		if convErr != nil {
+			return "", 0, convErr
+		}
+		path := strings.TrimSpace(strings.TrimSpace(rest[:strings.LastIndex(rest, "(")]))
+		return path, size, nil
+	}
+	return "", 0, fmt.Errorf("failed to parse output line with prefix %q: %q", prefix, strings.TrimSpace(out))
 }

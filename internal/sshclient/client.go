@@ -4,7 +4,6 @@
 package sshclient
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -82,43 +81,6 @@ func RunArgs(
 	tty bool,
 ) error {
 	return Run(ctx, target, sshArgs, shellWrap(shellJoin(argv)), stdin, stdout, stderr, tty)
-}
-
-// RunOutput executes a remote command string over SSH and returns stdout/stderr.
-func RunOutput(ctx context.Context, target string, sshArgs []string, command string) (string, string, error) {
-	var out bytes.Buffer
-	var errOut bytes.Buffer
-	err := Run(ctx, target, sshArgs, command, nil, &out, &errOut, false)
-	return out.String(), errOut.String(), err
-}
-
-// RunOutputArgs executes argv via `sh -lc` on the remote host and returns stdout/stderr.
-func RunOutputArgs(ctx context.Context, target string, sshArgs []string, argv []string) (string, string, error) {
-	return RunOutput(ctx, target, sshArgs, shellWrap(shellJoin(argv)))
-}
-
-// RunDetachedArgs starts argv in the remote background, redirects output to logPath, and returns its PID.
-func RunDetachedArgs(
-	ctx context.Context,
-	target string,
-	sshArgs []string,
-	argv []string,
-	logPath string,
-) (int, string, error) {
-	script := "nohup " + shellJoin(argv) + " >> " + shellQuote(logPath) + " 2>&1 < /dev/null & echo $!"
-	out, errOut, err := RunOutput(ctx, target, sshArgs, "sh -lc "+shellQuote(script))
-	if err != nil {
-		return 0, errOut, err
-	}
-	pidStr := strings.TrimSpace(out)
-	pid, convErr := strconv.Atoi(pidStr)
-	if convErr != nil || pid <= 0 {
-		if errOut != "" {
-			return 0, errOut, fmt.Errorf("failed to parse remote pid from output %q", pidStr)
-		}
-		return 0, "", fmt.Errorf("failed to parse remote pid from output %q", pidStr)
-	}
-	return pid, errOut, nil
 }
 
 func shellJoin(args []string) string {

@@ -18,7 +18,7 @@ import (
 
 	"github.com/containerd/errdefs"
 	"github.com/docker/go-units"
-	"github.com/forkbombeu/avdctl/internal/sshclient"
+	"github.com/forkbombeu/avdctl/internal/remoteavdctl"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -161,6 +161,33 @@ func (m *Manager) Start(opts StartOptions) (string, error) {
 	if opts.DPI == 0 {
 		opts.DPI = 360
 	}
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		args := []string{
+			"redroid", "start",
+			"--name", opts.Name,
+			"--image", opts.Image,
+			"--data-dir", opts.DataDir,
+			"--data-tar", opts.DataTar,
+			"--port", strconv.Itoa(opts.HostPort),
+			"--shm-size", opts.ShmSize,
+			"--memory", opts.Memory,
+			"--cpus", opts.CPUs,
+			"--binderfs", opts.BinderFS,
+			"--width", strconv.Itoa(opts.Width),
+			"--height", strconv.Itoa(opts.Height),
+			"--dpi", strconv.Itoa(opts.DPI),
+		}
+		out, err := m.runRemote(args...)
+		if err != nil {
+			return "", err
+		}
+		openIdx := strings.LastIndex(out, "(")
+		closeIdx := strings.LastIndex(out, ")")
+		if openIdx >= 0 && closeIdx > openIdx {
+			return strings.TrimSpace(out[openIdx+1 : closeIdx]), nil
+		}
+		return "", nil
+	}
 
 	// Equivalent to: rm -rf <dataDir>; tar -C <parent> -xf <dataTar>
 	dataParent := filepath.Dir(opts.DataDir)
@@ -203,6 +230,15 @@ func (m *Manager) WaitForBoot(opts WaitOptions) error {
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = time.Second
 	}
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		_, err := m.runRemote(
+			"redroid", "wait",
+			"--serial", opts.Serial,
+			"--timeout", opts.Timeout.String(),
+			"--poll", opts.PollInterval.String(),
+		)
+		return err
+	}
 
 	_ = m.run(m.env.ADBBin, "start-server")
 	_, _ = m.runOutput(m.env.ADBBin, "connect", opts.Serial)
@@ -235,6 +271,10 @@ func (m *Manager) Stop(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("empty container name")
 	}
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		_, err := m.runRemote("redroid", "stop", "--name", name)
+		return err
+	}
 	return m.docker.StopContainer(m.context(), name)
 }
 
@@ -242,6 +282,10 @@ func (m *Manager) Stop(name string) error {
 func (m *Manager) Delete(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("empty container name")
+	}
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		_, err := m.runRemote("redroid", "delete", "--name", name)
+		return err
 	}
 	return m.docker.RemoveContainer(m.context(), name, true)
 }
@@ -270,13 +314,6 @@ func (m *Manager) runOutput(bin string, args ...string) (string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if strings.TrimSpace(m.env.SSHTarget) != "" {
-		out, errOut, err := sshclient.RunOutputArgs(ctx, m.env.SSHTarget, m.env.SSHArgs, append([]string{bin}, args...))
-		if err != nil {
-			return "", fmt.Errorf("%s %v failed: %w\n%s", bin, args, err, strings.TrimSpace(errOut))
-		}
-		return out, nil
-	}
 	cmd := m.commandContext(ctx, bin, args...)
 	var out bytes.Buffer
 	var errOut bytes.Buffer
@@ -290,6 +327,15 @@ func (m *Manager) runOutput(bin string, args ...string) (string, error) {
 
 func (m *Manager) commandContext(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, bin, args...)
+}
+
+func (m *Manager) runRemote(args ...string) (string, error) {
+	ctx := m.context()
+	out, errOut, err := remoteavdctl.RunOutput(ctx, m.env.SSHTarget, m.env.SSHArgs, args)
+	if err != nil {
+		return "", fmt.Errorf("remote avdctl %v failed: %w\n%s", args, err, strings.TrimSpace(errOut))
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func newDockerSDKClient(env Environment) dockerClient {

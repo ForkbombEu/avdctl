@@ -512,6 +512,7 @@ func StartEmulator(env Env, name string, extraArgs ...string) (*exec.Cmd, error)
 
 	args = append(args, extraArgs...)
 	cmd := commandWithEnv([]string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stderr = newLineLogWriterWithMessage(env, "emulator stderr", "name", name, "stream", "stderr")
 	if err := cmd.Start(); err != nil {
 		recordSpanError(span, err)
@@ -914,30 +915,6 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		recordSpanError(span, err)
 		return nil, "", "", fmt.Errorf("open log: %w", err)
 	}
-	stdoutWriter := newLineLogWriterWithMessage(
-		env,
-		"emulator stdout",
-		"name",
-		name,
-		"port",
-		port,
-		"log_path",
-		logPath,
-		"stream",
-		"stdout",
-	)
-	stderrWriter := newLineLogWriterWithMessage(
-		env,
-		"emulator stderr",
-		"name",
-		name,
-		"port",
-		port,
-		"log_path",
-		logPath,
-		"stream",
-		"stderr",
-	)
 
 	args := []string{
 		"-avd", name,
@@ -958,8 +935,11 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 
 	args = append(args, extraArgs...)
 	cmd := commandWithEnv([]string{"QEMU_FILE_LOCKING=off", "ADB_VENDOR_KEYS=/dev/null"}, env.Emulator, args...)
-	cmd.Stdout = io.MultiWriter(logFile, stdoutWriter)
-	cmd.Stderr = io.MultiWriter(logFile, stderrWriter)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// For detached emulators, write directly to a file descriptor instead of parent-owned
+	// pipes (e.g. io.MultiWriter), otherwise the child can die when avdctl exits.
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 
 	if err := cmd.Start(); err != nil {
 		_ = logFile.Close()
@@ -978,6 +958,7 @@ func StartEmulatorOnPort(env Env, name string, port int, extraArgs ...string) (*
 		)
 		return nil, "", "", fmt.Errorf("emulator start: %w", err)
 	}
+	_ = logFile.Close()
 	serial := fmt.Sprintf("emulator-%d", port)
 	span.SetAttributes(
 		attribute.String("serial", serial),
@@ -1579,14 +1560,15 @@ func CustomizeStart(env Env, name string) (string, error) {
 	}
 	args := []string{"-avd", name, "-no-snapshot-load", "-no-snapshot-save"}
 	cmd := commandWithEnv([]string{"QEMU_FILE_LOCKING=off"}, env.Emulator, args...)
-	stdoutWriter := newLineLogWriterWithMessage(env, "emulator stdout", "name", name, "log_path", logPath, "stream", "stdout")
-	stderrWriter := newLineLogWriterWithMessage(env, "emulator stderr", "name", name, "log_path", logPath, "stream", "stderr")
-	cmd.Stdout = io.MultiWriter(lf, stdoutWriter)
-	cmd.Stderr = io.MultiWriter(lf, stderrWriter)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	// Keep the child independent from parent lifecycle: file-only stdio for detached launch.
+	cmd.Stdout = lf
+	cmd.Stderr = lf
 	if err := cmd.Start(); err != nil {
 		_ = lf.Close()
 		return "", fmt.Errorf("emulator start: %w", err)
 	}
+	_ = lf.Close()
 	return logPath, nil
 }
 

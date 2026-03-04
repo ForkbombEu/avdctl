@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,6 +37,9 @@ type Environment struct {
 	DockerHost string
 	ADBBin     string
 	TarBin     string
+	SudoBin    string
+	Sudo       bool
+	SudoPass   string
 
 	SSHTarget string
 	SSHArgs   []string
@@ -73,6 +77,7 @@ type StartOptions struct {
 	Image   string
 	DataDir string
 	DataTar string
+	UseSudo bool
 
 	HostPort int
 
@@ -100,6 +105,9 @@ func New() *Manager {
 		DockerHost: strings.TrimSpace(os.Getenv("DOCKER_HOST")),
 		ADBBin:     "adb",
 		TarBin:     "tar",
+		SudoBin:    strings.TrimSpace(os.Getenv("AVDCTL_SUDO_BIN")),
+		Sudo:       getenvBool("AVDCTL_SUDO"),
+		SudoPass:   os.Getenv("AVDCTL_SUDO_PASSWORD"),
 		SSHTarget:  os.Getenv("AVDCTL_SSH_TARGET"),
 		SSHArgs:    strings.Fields(os.Getenv("AVDCTL_SSH_ARGS")),
 		Context:    context.Background(),
@@ -113,6 +121,9 @@ func NewWithEnv(env Environment) *Manager {
 	}
 	if strings.TrimSpace(env.TarBin) == "" {
 		env.TarBin = "tar"
+	}
+	if strings.TrimSpace(env.SudoBin) == "" {
+		env.SudoBin = "sudo"
 	}
 	if env.Context == nil {
 		env.Context = context.Background()
@@ -161,6 +172,7 @@ func (m *Manager) Start(opts StartOptions) (string, error) {
 	if opts.DPI == 0 {
 		opts.DPI = 360
 	}
+	useSudo := opts.UseSudo || m.env.Sudo
 	if strings.TrimSpace(m.env.SSHTarget) != "" {
 		args := []string{
 			"redroid", "start",
@@ -177,6 +189,9 @@ func (m *Manager) Start(opts StartOptions) (string, error) {
 			"--height", strconv.Itoa(opts.Height),
 			"--dpi", strconv.Itoa(opts.DPI),
 		}
+		if useSudo {
+			args = append(args, "--sudo")
+		}
 		out, err := m.runRemote(args...)
 		if err != nil {
 			return "", err
@@ -191,13 +206,17 @@ func (m *Manager) Start(opts StartOptions) (string, error) {
 
 	// Equivalent to: rm -rf <dataDir>; tar -C <parent> -xf <dataTar>
 	dataParent := filepath.Dir(opts.DataDir)
-	if err := m.run("mkdir", "-p", dataParent); err != nil {
+	run := m.run
+	if useSudo {
+		run = m.runSudo
+	}
+	if err := run("mkdir", "-p", dataParent); err != nil {
 		return "", err
 	}
-	if err := m.run("rm", "-rf", opts.DataDir); err != nil {
+	if err := run("rm", "-rf", opts.DataDir); err != nil {
 		return "", err
 	}
-	if err := m.run(m.env.TarBin, "--numeric-owner", "--xattrs", "--acls", "-C", dataParent, "-xf", opts.DataTar); err != nil {
+	if err := run(m.env.TarBin, "--numeric-owner", "--xattrs", "--acls", "-C", dataParent, "-xf", opts.DataTar); err != nil {
 		return "", err
 	}
 
@@ -309,7 +328,30 @@ func (m *Manager) run(bin string, args ...string) error {
 	return err
 }
 
+func (m *Manager) runSudo(bin string, args ...string) error {
+	_, err := m.runOutputSudo(bin, args...)
+	return err
+}
+
 func (m *Manager) runOutput(bin string, args ...string) (string, error) {
+	return m.runOutputWithInput(nil, bin, args...)
+}
+
+func (m *Manager) runOutputSudo(bin string, args ...string) (string, error) {
+	sudoArgs := make([]string, 0, len(args)+5)
+	var stdin io.Reader
+	if m.env.SudoPass != "" {
+		sudoArgs = append(sudoArgs, "-S", "-p", "")
+		stdin = strings.NewReader(m.env.SudoPass + "\n")
+	} else {
+		sudoArgs = append(sudoArgs, "-n")
+	}
+	sudoArgs = append(sudoArgs, bin)
+	sudoArgs = append(sudoArgs, args...)
+	return m.runOutputWithInput(stdin, m.env.SudoBin, sudoArgs...)
+}
+
+func (m *Manager) runOutputWithInput(stdin io.Reader, bin string, args ...string) (string, error) {
 	ctx := m.env.Context
 	if ctx == nil {
 		ctx = context.Background()
@@ -317,6 +359,7 @@ func (m *Manager) runOutput(bin string, args ...string) (string, error) {
 	cmd := m.commandContext(ctx, bin, args...)
 	var out bytes.Buffer
 	var errOut bytes.Buffer
+	cmd.Stdin = stdin
 	cmd.Stdout = &out
 	cmd.Stderr = &errOut
 	if err := cmd.Run(); err != nil {
@@ -361,6 +404,22 @@ func dockerHostFromEnv(env Environment) string {
 		return "ssh://" + strings.TrimSpace(env.SSHTarget)
 	}
 	return ""
+}
+
+func getenvBool(name string) bool {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return false
+	}
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b
+	}
+	switch strings.ToLower(v) {
+	case "yes", "y", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseMemoryBytes(value string) (int64, error) {

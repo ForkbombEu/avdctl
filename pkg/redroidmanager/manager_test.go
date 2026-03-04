@@ -101,6 +101,138 @@ exit 0
 	}
 }
 
+func TestStartWithSudoNoPassword(t *testing.T) {
+	tmp := t.TempDir()
+	sudoLog := filepath.Join(tmp, "sudo.log")
+	tarLog := filepath.Join(tmp, "tar.log")
+
+	sudo := writeExecScript(t, tmp, "sudo", `
+printf '%s\n' "$*" >> "`+sudoLog+`"
+if [ "${1:-}" = "-n" ]; then
+  shift
+elif [ "${1:-}" = "-S" ]; then
+  read -r _pass
+  shift
+  if [ "${1:-}" = "-p" ]; then
+    shift
+    shift
+  fi
+fi
+exec "$@"
+`)
+	tar := writeExecScript(t, tmp, "tar", `
+echo "$@" >> "`+tarLog+`"
+exit 0
+`)
+
+	dataDir := filepath.Join(tmp, "redroid-data")
+	dataTar := filepath.Join(tmp, "redroid-data.tar")
+	if err := os.WriteFile(dataTar, []byte("fake"), 0o644); err != nil {
+		t.Fatalf("write data tar: %v", err)
+	}
+
+	fakeDocker := &fakeDockerClient{runID: "container-123"}
+	m := NewWithEnv(Environment{
+		Sudo:    true,
+		SudoBin: sudo,
+		TarBin:  tar,
+		ADBBin:  filepath.Join(tmp, "missing-adb"),
+	})
+	m.docker = fakeDocker
+
+	if _, err := m.Start(StartOptions{
+		Name:    "redroid15",
+		Image:   "magsafe/redroid15gappsmagisk:latest",
+		DataDir: dataDir,
+		DataTar: dataTar,
+	}); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	sudoCmd, err := os.ReadFile(sudoLog)
+	if err != nil {
+		t.Fatalf("read sudo log: %v", err)
+	}
+	got := string(sudoCmd)
+	if !strings.Contains(got, "-n mkdir -p "+filepath.Dir(dataDir)) {
+		t.Fatalf("missing sudo mkdir call: %s", got)
+	}
+	if !strings.Contains(got, "-n rm -rf "+dataDir) {
+		t.Fatalf("missing sudo rm call: %s", got)
+	}
+	if !strings.Contains(got, "-n "+tar+" --numeric-owner --xattrs --acls -C "+filepath.Dir(dataDir)+" -xf "+dataTar) {
+		t.Fatalf("missing sudo tar call: %s", got)
+	}
+
+	tarCmd, err := os.ReadFile(tarLog)
+	if err != nil {
+		t.Fatalf("read tar log: %v", err)
+	}
+	if !strings.Contains(string(tarCmd), "-C "+filepath.Dir(dataDir)+" -xf "+dataTar) {
+		t.Fatalf("unexpected tar args: %s", string(tarCmd))
+	}
+}
+
+func TestStartWithSudoPassword(t *testing.T) {
+	tmp := t.TempDir()
+	sudoLog := filepath.Join(tmp, "sudo.log")
+
+	sudo := writeExecScript(t, tmp, "sudo", `
+printf '%s\n' "$*" >> "`+sudoLog+`"
+if [ "${1:-}" != "-S" ]; then
+  echo "expected -S" >&2
+  exit 2
+fi
+read -r pass
+if [ "$pass" != "secret" ]; then
+  echo "bad password" >&2
+  exit 3
+fi
+shift
+if [ "${1:-}" = "-p" ]; then
+  shift
+  shift
+fi
+exec "$@"
+`)
+	tar := writeExecScript(t, tmp, "tar", `
+exit 0
+`)
+
+	dataDir := filepath.Join(tmp, "redroid-data")
+	dataTar := filepath.Join(tmp, "redroid-data.tar")
+	if err := os.WriteFile(dataTar, []byte("fake"), 0o644); err != nil {
+		t.Fatalf("write data tar: %v", err)
+	}
+
+	fakeDocker := &fakeDockerClient{runID: "container-123"}
+	m := NewWithEnv(Environment{
+		Sudo:     true,
+		SudoBin:  sudo,
+		SudoPass: "secret",
+		TarBin:   tar,
+		ADBBin:   filepath.Join(tmp, "missing-adb"),
+	})
+	m.docker = fakeDocker
+
+	if _, err := m.Start(StartOptions{
+		Name:    "redroid15",
+		Image:   "magsafe/redroid15gappsmagisk:latest",
+		DataDir: dataDir,
+		DataTar: dataTar,
+	}); err != nil {
+		t.Fatalf("Start() error: %v", err)
+	}
+
+	sudoCmd, err := os.ReadFile(sudoLog)
+	if err != nil {
+		t.Fatalf("read sudo log: %v", err)
+	}
+	if !strings.Contains(string(sudoCmd), "-S -p") {
+		t.Fatalf("expected sudo to run with -S -p, got: %s", string(sudoCmd))
+	}
+}
+
 func TestWaitForBoot(t *testing.T) {
 	tmp := t.TempDir()
 	state := filepath.Join(tmp, "state")

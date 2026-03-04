@@ -569,6 +569,7 @@ func main() {
 	}
 
 	var rdName, rdImage, rdDataDir, rdDataTar, rdShmSize, rdMemory, rdCPUs, rdBinderFS string
+	var rdSudo bool
 	var rdPort, rdWidth, rdHeight, rdDPI int
 	redroidStartCmd := &cobra.Command{
 		Use:   "start",
@@ -580,6 +581,7 @@ func main() {
 				Image:    rdImage,
 				DataDir:  rdDataDir,
 				DataTar:  rdDataTar,
+				UseSudo:  rdSudo,
 				HostPort: rdPort,
 				ShmSize:  rdShmSize,
 				Memory:   rdMemory,
@@ -604,6 +606,7 @@ func main() {
 	redroidStartCmd.Flags().StringVar(&rdImage, "image", "magsafe/redroid15gappsmagisk:latest", "docker image")
 	redroidStartCmd.Flags().StringVar(&rdDataDir, "data-dir", defaultDataDir, "redroid data directory to mount at /data")
 	redroidStartCmd.Flags().StringVar(&rdDataTar, "data-tar", defaultDataTar, "tar archive to restore before start")
+	redroidStartCmd.Flags().BoolVar(&rdSudo, "sudo", false, "run data restore steps via sudo (or set AVDCTL_SUDO=1)")
 	redroidStartCmd.Flags().IntVar(&rdPort, "port", 5555, "host port mapped to container adb port 5555")
 	redroidStartCmd.Flags().StringVar(&rdShmSize, "shm-size", "3g", "docker --shm-size value")
 	redroidStartCmd.Flags().StringVar(&rdMemory, "memory", "5g", "docker --memory value")

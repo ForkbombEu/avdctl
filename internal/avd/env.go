@@ -78,3 +78,11 @@ func getenv(k, def string) string {
 }
 
 func DefaultGoldenDir() string { return Detect().GoldenDir }
+
+func DefaultRedroidDir() string {
+	cfgDir, err := os.UserConfigDir()
+	if err == nil && strings.TrimSpace(cfgDir) != "" {
+		return filepath.Join(cfgDir, "avdctl", "golden")
+	}
+	return filepath.Join(DefaultGoldenDir(), "redroid")
+}

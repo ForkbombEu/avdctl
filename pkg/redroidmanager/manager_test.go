@@ -2,6 +2,8 @@ package redroidmanager
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,7 @@ type fakeDockerClient struct {
 	removeCalls []string
 	stopCalls   []string
 	runCalls    []dockerRunOptions
+	pullCalls   []string
 
 	runID string
 	err   error
@@ -42,6 +45,11 @@ func (f *fakeDockerClient) RunContainer(_ context.Context, opts dockerRunOptions
 
 func (f *fakeDockerClient) StopContainer(_ context.Context, name string) error {
 	f.stopCalls = append(f.stopCalls, name)
+	return f.err
+}
+
+func (f *fakeDockerClient) PullImage(_ context.Context, image string) error {
+	f.pullCalls = append(f.pullCalls, image)
 	return f.err
 }
 
@@ -312,6 +320,43 @@ func TestStopAndDelete(t *testing.T) {
 	}
 	if len(fakeDocker.removeCalls) != 1 || fakeDocker.removeCalls[0] != "redroid15" {
 		t.Fatalf("unexpected remove calls: %#v", fakeDocker.removeCalls)
+	}
+}
+
+func TestInitPullsImageAndDownloadsTar(t *testing.T) {
+	tmp := t.TempDir()
+	dataTar := filepath.Join(tmp, "redroid-data.tar")
+	payload := "data-tar-content"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	fakeDocker := &fakeDockerClient{}
+	m := NewWithEnv(Environment{})
+	m.docker = fakeDocker
+
+	if err := m.Init(InitOptions{
+		Image:      "magsafe/redroid15gappsmagisk:latest",
+		DataTarURL: srv.URL,
+		DataTar:    dataTar,
+	}); err != nil {
+		t.Fatalf("Init() error: %v", err)
+	}
+
+	if len(fakeDocker.pullCalls) != 1 || fakeDocker.pullCalls[0] != "magsafe/redroid15gappsmagisk:latest" {
+		t.Fatalf("unexpected pull calls: %#v", fakeDocker.pullCalls)
+	}
+	got, err := os.ReadFile(dataTar)
+	if err != nil {
+		t.Fatalf("read downloaded data tar: %v", err)
+	}
+	if string(got) != payload {
+		t.Fatalf("downloaded payload mismatch: got %q", string(got))
 	}
 }
 

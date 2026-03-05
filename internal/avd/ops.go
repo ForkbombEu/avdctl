@@ -95,8 +95,8 @@ func ensureSysImg(env Env, pkg string) error {
 	if env.SDKRoot != "" {
 		// quick existence probe
 		parts := strings.Split(pkg, ";")
-		if len(parts) >= 3 {
-			p := filepath.Join(env.SDKRoot, "system-images", parts[1], parts[2], "x86_64")
+		if len(parts) >= 4 {
+			p := filepath.Join(env.SDKRoot, "system-images", parts[1], parts[2], parts[3])
 			if _, err := os.Stat(p); err == nil {
 				return nil
 			}
@@ -118,7 +118,9 @@ func InitBase(env Env, name, sysImage, device string) (Info, error) {
 	if err := ensureSysImg(env, sysImage); err != nil {
 		return Info{}, fmt.Errorf("failed to ensure system image: %w", err)
 	}
-	out, err := runCommandCombinedOutputWithEnv(env.Context, nil, strings.NewReader("no\n"), env.AvdMgr, "create", "avd",
+	// Keep avdmanager output location aligned with env.AVDHome and the rest of avdctl.
+	extraEnv := []string{"ANDROID_AVD_HOME=" + env.AVDHome}
+	out, err := runCommandCombinedOutputWithEnv(env.Context, extraEnv, strings.NewReader("no\n"), env.AvdMgr, "create", "avd",
 		"-n", name, "-k", sysImage, "-d", device, "--force")
 	if err != nil {
 		return Info{}, fmt.Errorf("avdmanager create: %v\n%s", err, out)
@@ -235,7 +237,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// ---------------------------------------------------------------------
 	// 1. Copy or template the config.ini and disable qcow2
 	// ---------------------------------------------------------------------
-	tpl := os.Getenv("AVDCTL_CONFIG_TEMPLATE")
+	tpl := strings.TrimSpace(env.ConfigTpl)
 	dstCfg := filepath.Join(cloneDir, "config.ini")
 	var cfgBytes []byte
 

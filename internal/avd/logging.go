@@ -56,10 +56,6 @@ func newLineLogWriterWithMessage(env Env, message string, fields ...any) io.Writ
 	}
 }
 
-func newLineLogWriter(env Env, fields ...any) io.Writer {
-	return newLineLogWriterWithMessage(env, "emulator stderr", fields...)
-}
-
 func newCommandLogWriter(env Env, command string, args []string) io.Writer {
 	fields := []any{"command", command, "stream", "stderr"}
 	if len(args) > 0 {

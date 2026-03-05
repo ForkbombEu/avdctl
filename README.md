@@ -69,7 +69,19 @@ export ANDROID_SDK_ROOT=/opt/android-sdk              # Your Android SDK path
 export ANDROID_AVD_HOME=$HOME/.android/avd            # Default: ~/.android/avd
 export AVDCTL_GOLDEN_DIR=$HOME/avd-golden             # Default: ~/avd-golden
 export AVDCTL_CONFIG_TEMPLATE=/path/to/config.ini.tpl # Optional: custom config template
+export AVDCTL_SSH_TARGET=android@remote-builder       # Optional: run tool commands over SSH
+export AVDCTL_SSH_ARGS="-p 2222 -o BatchMode=yes"     # Optional: extra ssh args
 ```
+
+All CLI subcommands also support:
+
+- `--ssh user@host`
+- `--ssh-arg <value>` (repeatable)
+
+When `--ssh` is enabled, `avdctl` delegates the whole command to a remote `avdctl`
+process over a single SSH session. Path arguments (for example `--golden`, `--dest`)
+are interpreted on the remote host, not on the local machine. Ensure `avdctl` is
+installed on the remote host and available in `PATH`.
 
 ## Quick Start
 
@@ -94,6 +106,27 @@ go build -o bin/avdctl ./cmd/avdctl
 ./bin/avdctl init-base --name base-a35 \
   --image "system-images;android-35;google_apis_playstore;x86_64" \
   --device pixel_6
+```
+
+## Redroid Commands
+
+`avdctl` also supports Redroid lifecycle operations:
+
+```bash
+# Restore data tar + start container
+./bin/avdctl redroid start \
+  --name redroid15 \
+  --image magsafe/redroid15gappsmagisk:latest \
+  --data-dir "$HOME/redroid-data" \
+  --data-tar "$HOME/redroid-data.tar" \
+  --port 5555
+
+# Wait until Android framework services are ready
+./bin/avdctl redroid wait --serial 127.0.0.1:5555 --timeout 3m
+
+# Stop/remove container
+./bin/avdctl redroid stop --name redroid15
+./bin/avdctl redroid delete --name redroid15
 ```
 
 ### 3. Boot and Configure (Manual Setup)

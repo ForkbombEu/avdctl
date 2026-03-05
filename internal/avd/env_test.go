@@ -21,3 +21,30 @@ func TestDefaultGoldenDirUsesEnvOverride(t *testing.T) {
 		t.Fatalf("DefaultGoldenDir() = %q, want %q", got, want)
 	}
 }
+
+func TestDetectSSHSettings(t *testing.T) {
+	oldTarget := os.Getenv("AVDCTL_SSH_TARGET")
+	oldArgs := os.Getenv("AVDCTL_SSH_ARGS")
+	t.Cleanup(func() {
+		_ = os.Setenv("AVDCTL_SSH_TARGET", oldTarget)
+		_ = os.Setenv("AVDCTL_SSH_ARGS", oldArgs)
+	})
+
+	if err := os.Setenv("AVDCTL_SSH_TARGET", "ci@remote-host"); err != nil {
+		t.Fatalf("set ssh target: %v", err)
+	}
+	if err := os.Setenv("AVDCTL_SSH_ARGS", "-p 2222 -o StrictHostKeyChecking=no"); err != nil {
+		t.Fatalf("set ssh args: %v", err)
+	}
+
+	env := Detect()
+	if env.SSHTarget != "ci@remote-host" {
+		t.Fatalf("SSHTarget = %q", env.SSHTarget)
+	}
+	if len(env.SSHArgs) != 4 {
+		t.Fatalf("unexpected SSHArgs length: %#v", env.SSHArgs)
+	}
+	if env.SSHArgs[0] != "-p" || env.SSHArgs[1] != "2222" {
+		t.Fatalf("unexpected SSHArgs prefix: %#v", env.SSHArgs)
+	}
+}

@@ -16,10 +16,13 @@ import (
 	"github.com/spf13/cobra"
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
+	"github.com/forkbombeu/avdctl/internal/remoteavdctl"
 	"github.com/forkbombeu/avdctl/pkg/avdmanager"
+	"github.com/forkbombeu/avdctl/pkg/redroidmanager"
 )
 
 var version = "dev"
+var errRemoteDelegated = errors.New("command delegated to remote avdctl")
 
 const colophon = `
                  _      _   _ _
@@ -44,11 +47,27 @@ func main() {
 		}()
 	}
 	env := core.Detect()
+	sshTarget := strings.TrimSpace(env.SSHTarget)
+	sshArgs := append([]string(nil), env.SSHArgs...)
 
 	root := &cobra.Command{
-		Use:   "avdctl",
-		Short: "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
+		Use:           "avdctl",
+		Short:         "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			if shouldDelegateOverSSH(cmd, sshTarget) {
+				remoteArgs := stripSSHFlags(os.Args[1:])
+				if err := runRemoteAVDCtl(sshTarget, sshArgs, remoteArgs); err != nil {
+					return err
+				}
+				return errRemoteDelegated
+			}
+			return nil
+		},
 	}
+	root.PersistentFlags().StringVar(&sshTarget, "ssh", "", "SSH target (user@host) to run tool commands remotely")
+	root.PersistentFlags().StringArrayVar(&sshArgs, "ssh-arg", sshArgs, "Extra ssh args (repeatable, e.g. --ssh-arg=-i --ssh-arg=~/.ssh/key)")
 
 	versionCmd := &cobra.Command{
 		Use:   "version",
@@ -283,7 +302,6 @@ func main() {
 			if runName == "" {
 				return fmt.Errorf("--name is required")
 			}
-			env := core.Detect()
 
 			if runPort > 0 {
 				if runPort%2 != 0 {
@@ -367,7 +385,6 @@ func main() {
 		Use:   "ps",
 		Short: "List running emulators with AVD name, serial, port, PID",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			procs, err := core.ListRunning(env)
 			if err != nil {
 				return err
@@ -401,7 +418,6 @@ func main() {
 		Use:   "status",
 		Short: "Show status for a running emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			if stAll {
 				all, err := core.List(env)
 				if err != nil {
@@ -475,7 +491,6 @@ func main() {
 		Use:   "stop",
 		Short: "Stop a running emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			if stopSerial == "" && stopName == "" {
 				return fmt.Errorf("use --name or --serial")
 			}
@@ -512,7 +527,6 @@ func main() {
 		Use:   "stop-bluetooth",
 		Short: "Disable Bluetooth and scanning on a running emulator to prevent 'Bluetooth keeps stopping' errors",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			env := core.Detect()
 			if stopBtSerial == "" && stopBtName == "" {
 				return fmt.Errorf("either --name or --serial must be specified")
 			}
@@ -582,8 +596,216 @@ func main() {
 	cleanupCmd.Flags().BoolVar(&cleanupDryRun, "dry-run", false, "show what would be cleaned")
 	root.AddCommand(cleanupCmd)
 
+	// redroid
+	configDir := ""
+	if c, err := os.UserConfigDir(); err == nil {
+		configDir = c
+	}
+	defaultRedroidDir := filepath.Join(configDir, "avdctl", "golden")
+	defaultDataDir := filepath.Join(defaultRedroidDir, "redroid-data")
+	defaultDataTar := filepath.Join(defaultRedroidDir, "redroid-data.tar")
+	redroidCmd := &cobra.Command{
+		Use:   "redroid",
+		Short: "Manage Redroid docker containers",
+	}
+
+	var rdName, rdImage, rdDataDir, rdDataTar, rdShmSize, rdMemory, rdCPUs, rdBinderFS string
+	var rdSudo bool
+	var rdPort, rdWidth, rdHeight, rdDPI int
+	redroidStartCmd := &cobra.Command{
+		Use:   "start",
+		Short: "Restore redroid data tar and start Redroid container",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := redroidmanager.New()
+			containerID, err := mgr.Start(redroidmanager.StartOptions{
+				Name:     rdName,
+				Image:    rdImage,
+				DataDir:  rdDataDir,
+				DataTar:  rdDataTar,
+				UseSudo:  rdSudo,
+				HostPort: rdPort,
+				ShmSize:  rdShmSize,
+				Memory:   rdMemory,
+				CPUs:     rdCPUs,
+				BinderFS: rdBinderFS,
+				Width:    rdWidth,
+				Height:   rdHeight,
+				DPI:      rdDPI,
+			})
+			if err != nil {
+				return err
+			}
+			if containerID == "" {
+				fmt.Printf("Started %s\n", rdName)
+				return nil
+			}
+			fmt.Printf("Started %s (%s)\n", rdName, containerID)
+			return nil
+		},
+	}
+	redroidStartCmd.Flags().StringVar(&rdName, "name", "redroid15", "container name")
+	redroidStartCmd.Flags().StringVar(&rdImage, "image", "magsafe/redroid15gappsmagisk:latest", "docker image")
+	redroidStartCmd.Flags().StringVar(&rdDataDir, "data-dir", defaultDataDir, "redroid data directory to mount at /data")
+	redroidStartCmd.Flags().StringVar(&rdDataTar, "data-tar", defaultDataTar, "tar archive to restore before start")
+	redroidStartCmd.Flags().BoolVar(&rdSudo, "sudo", false, "run data restore steps via sudo (or set AVDCTL_SUDO=1)")
+	redroidStartCmd.Flags().IntVar(&rdPort, "port", 5555, "host port mapped to container adb port 5555")
+	redroidStartCmd.Flags().StringVar(&rdShmSize, "shm-size", "3g", "docker --shm-size value")
+	redroidStartCmd.Flags().StringVar(&rdMemory, "memory", "5g", "docker --memory value")
+	redroidStartCmd.Flags().StringVar(&rdCPUs, "cpus", "4", "docker --cpus value")
+	redroidStartCmd.Flags().StringVar(&rdBinderFS, "binderfs", "/dev/binderfs", "binderfs mount source path")
+	redroidStartCmd.Flags().IntVar(&rdWidth, "width", 1080, "androidboot.redroid_width")
+	redroidStartCmd.Flags().IntVar(&rdHeight, "height", 2400, "androidboot.redroid_height")
+	redroidStartCmd.Flags().IntVar(&rdDPI, "dpi", 360, "androidboot.redroid_dpi")
+	redroidCmd.AddCommand(redroidStartCmd)
+
+	var rdWaitSerial string
+	var rdWaitTimeout, rdWaitPoll time.Duration
+	redroidWaitCmd := &cobra.Command{
+		Use:   "wait",
+		Short: "Wait until Redroid boot and framework services are ready",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			mgr := redroidmanager.New()
+			if err := mgr.WaitForBoot(redroidmanager.WaitOptions{
+				Serial:       rdWaitSerial,
+				Timeout:      rdWaitTimeout,
+				PollInterval: rdWaitPoll,
+			}); err != nil {
+				return err
+			}
+			fmt.Printf("Redroid ready on %s\n", rdWaitSerial)
+			return nil
+		},
+	}
+	redroidWaitCmd.Flags().StringVar(&rdWaitSerial, "serial", "127.0.0.1:5555", "adb serial, e.g. 127.0.0.1:5555")
+	redroidWaitCmd.Flags().DurationVar(&rdWaitTimeout, "timeout", 3*time.Minute, "wait timeout")
+	redroidWaitCmd.Flags().DurationVar(&rdWaitPoll, "poll", 1*time.Second, "poll interval")
+	redroidCmd.AddCommand(redroidWaitCmd)
+
+	var rdStopName string
+	redroidStopCmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop a Redroid container by name",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(rdStopName) == "" {
+				return errors.New("--name is required")
+			}
+			mgr := redroidmanager.New()
+			if err := mgr.Stop(rdStopName); err != nil {
+				return err
+			}
+			fmt.Printf("Stopped %s\n", rdStopName)
+			return nil
+		},
+	}
+	redroidStopCmd.Flags().StringVar(&rdStopName, "name", "", "container name")
+	redroidCmd.AddCommand(redroidStopCmd)
+
+	var rdDeleteName string
+	redroidDeleteCmd := &cobra.Command{
+		Use:   "delete",
+		Short: "Force remove a Redroid container by name",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(rdDeleteName) == "" {
+				return errors.New("--name is required")
+			}
+			mgr := redroidmanager.New()
+			if err := mgr.Delete(rdDeleteName); err != nil {
+				return err
+			}
+			fmt.Printf("Deleted %s\n", rdDeleteName)
+			return nil
+		},
+	}
+	redroidDeleteCmd.Flags().StringVar(&rdDeleteName, "name", "", "container name")
+	redroidCmd.AddCommand(redroidDeleteCmd)
+
+	root.AddCommand(redroidCmd)
+
 	if err := root.Execute(); err != nil {
+		if isRemoteDelegatedError(err) {
+			return
+		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func isRemoteDelegatedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, errRemoteDelegated) {
+		return true
+	}
+	return strings.Contains(err.Error(), errRemoteDelegated.Error())
+}
+
+func shouldDelegateOverSSH(cmd *cobra.Command, sshTarget string) bool {
+	if strings.TrimSpace(sshTarget) == "" || cmd == nil {
+		return false
+	}
+	if cmd == cmd.Root() {
+		return false
+	}
+	switch cmd.Name() {
+	case "version", "help", "__complete", "__completeNoDesc":
+		return false
+	}
+	return true
+}
+
+func runRemoteAVDCtl(sshTarget string, sshArgs, avdArgs []string) error {
+	return remoteavdctl.Run(
+		context.Background(),
+		sshTarget,
+		sshArgs,
+		avdArgs,
+		os.Stdin,
+		os.Stdout,
+		os.Stderr,
+		shouldAllocateTTY(sshArgs),
+	)
+}
+
+func shouldAllocateTTY(sshArgs []string) bool {
+	if !isTerminalFile(os.Stdin) || !isTerminalFile(os.Stdout) {
+		return false
+	}
+	for _, arg := range sshArgs {
+		switch arg {
+		case "-t", "-tt", "-T":
+			return false
+		}
+	}
+	return true
+}
+
+func isTerminalFile(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return (info.Mode() & os.ModeCharDevice) != 0
+}
+
+func stripSSHFlags(args []string) []string {
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "--ssh" || arg == "--ssh-arg":
+			if i+1 < len(args) {
+				i++
+			}
+		case strings.HasPrefix(arg, "--ssh="),
+			strings.HasPrefix(arg, "--ssh-arg="):
+			continue
+		default:
+			out = append(out, arg)
+		}
+	}
+	return out
 }

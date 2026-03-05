@@ -237,7 +237,7 @@ func CloneFromGolden(env Env, base, name, golden string) (Info, error) {
 	// ---------------------------------------------------------------------
 	// 1. Copy or template the config.ini and disable qcow2
 	// ---------------------------------------------------------------------
-	tpl := os.Getenv("AVDCTL_CONFIG_TEMPLATE")
+	tpl := strings.TrimSpace(env.ConfigTpl)
 	dstCfg := filepath.Join(cloneDir, "config.ini")
 	var cfgBytes []byte
 

@@ -112,7 +112,7 @@ func main() {
 	var baseName, sysImg, device, initSpec string
 	initCmd := &cobra.Command{
 		Use:   "init-base",
-		Short: "Create a base AVD (from --spec or --image/--device)",
+		Short: "Initialize from spec (AVD/redroid) or create a base AVD from --image/--device",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(initSpec) != "" {
 				if cmd.Flags().Changed("image") || cmd.Flags().Changed("device") {
@@ -139,15 +139,25 @@ func main() {
 					fmt.Printf("Spec: image=%s device=%s\n", parsed.SystemImage, parsed.Device)
 					return nil
 				case core.InitKindRedroid:
+					assetsDir := core.DefaultRedroidDir()
+					dataTarPath := filepath.Join(assetsDir, fmt.Sprintf("%s-data.tar", core.DefaultInitName(initSpec)))
+					mgr := redroidmanager.New()
+					if err := mgr.Init(redroidmanager.InitOptions{
+						Image:      parsed.RedroidImage,
+						DataTarURL: parsed.RedroidDataTarURL,
+						DataTar:    dataTarPath,
+					}); err != nil {
+						return err
+					}
 					fmt.Printf(
-						"Parsed redroid spec: image=%s android=%s flavor=%s arch=%s profile=%s\n",
-						parsed.ImageName,
-						parsed.AndroidVersion,
-						parsed.Flavor,
-						parsed.Arch,
+						"Initialized redroid assets: image=%s api=%s tag=%s abi=%s profile=%s data-tar=%s\n",
+						parsed.RedroidImage,
+						parsed.APILevel,
+						parsed.Tag,
+						parsed.ABI,
 						parsed.Profile,
+						dataTarPath,
 					)
-					fmt.Println("Redroid image creation is not implemented yet.")
 					return nil
 				default:
 					return fmt.Errorf("unsupported init kind: %q", parsed.Kind)
@@ -168,7 +178,7 @@ func main() {
 	initCmd.Flags().StringVar(&baseName, "name", "base-a35", "AVD name (include API, e.g. base-a35)")
 	initCmd.Flags().StringVar(&sysImg, "image", "system-images;android-35;google_apis_playstore;x86_64", "System image ID")
 	initCmd.Flags().StringVar(&device, "device", "pixel_6", "Device profile")
-	initCmd.Flags().StringVar(&initSpec, "spec", "", "Init descriptor string (semicolon-separated)")
+	initCmd.Flags().StringVar(&initSpec, "spec", "", "Init descriptor string (AVD or redroid, semicolon-separated)")
 	root.AddCommand(initCmd)
 
 	// save-golden
@@ -597,11 +607,7 @@ func main() {
 	root.AddCommand(cleanupCmd)
 
 	// redroid
-	configDir := ""
-	if c, err := os.UserConfigDir(); err == nil {
-		configDir = c
-	}
-	defaultRedroidDir := filepath.Join(configDir, "avdctl", "golden")
+	defaultRedroidDir := core.DefaultRedroidDir()
 	defaultDataDir := filepath.Join(defaultRedroidDir, "redroid-data")
 	defaultDataTar := filepath.Join(defaultRedroidDir, "redroid-data.tar")
 	redroidCmd := &cobra.Command{

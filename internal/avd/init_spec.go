@@ -23,21 +23,40 @@ const (
 // Supported formats:
 //   - AVD full:  "system-images;android-35;google_apis_playstore;x86_64;pixel_6"
 //   - AVD short: "android-35;google_apis_playstore;x86_64;pixel_6"
-//   - Redroid:   "redroid15;android-35;google_apis_playstore;ARM64;logged-out"
+//   - Redroid:   "redroid15;android-35;google_apis_playstore;arm64-v8a;logged-out"
 type InitSpec struct {
 	Raw  string
 	Kind InitKind
 
-	// AVD fields
+	// Google system-image coordinates.
+	APILevel string
+	Tag      string
+	ABI      string
+
+	// AVD fields.
 	SystemImage string
 	Device      string
 
-	// Redroid fields
-	ImageName      string
-	AndroidVersion string
-	Flavor         string
-	Arch           string
-	Profile        string
+	// Redroid fields.
+	Profile           string
+	RedroidImage      string
+	RedroidDataTarURL string
+}
+
+type redroidCatalogEntry struct {
+	Image            string
+	DataTarByProfile map[string]string
+}
+
+// hardcodedRedroidCatalog maps redroid descriptor keys to image and profile data-tars.
+var hardcodedRedroidCatalog = map[string]redroidCatalogEntry{
+	normalizeInitKey("redroid15;android-35;google_apis_playstore;arm64-v8a"): {
+		Image: "magsafe/redroid15gappsmagisk:latest",
+		DataTarByProfile: map[string]string{
+			normalizeInitKey("logged-out"):         "https://example.com/redroid/android-35/logged-out.tar",
+			normalizeInitKey("fb-logged-internal"): "https://example.com/redroid/android-35/fb-logged-internal.tar",
+		},
+	},
 }
 
 func ParseInitSpec(input string) (InitSpec, error) {
@@ -58,6 +77,9 @@ func ParseInitSpec(input string) (InitSpec, error) {
 		return InitSpec{
 			Raw:         raw,
 			Kind:        InitKindAVD,
+			APILevel:    parts[1],
+			Tag:         parts[2],
+			ABI:         parts[3],
 			SystemImage: strings.Join(parts[:4], ";"),
 			Device:      parts[4],
 		}, nil
@@ -67,20 +89,31 @@ func ParseInitSpec(input string) (InitSpec, error) {
 		return InitSpec{
 			Raw:         raw,
 			Kind:        InitKindAVD,
+			APILevel:    parts[0],
+			Tag:         parts[1],
+			ABI:         parts[2],
 			SystemImage: strings.Join([]string{"system-images", parts[0], parts[1], parts[2]}, ";"),
 			Device:      parts[3],
 		}, nil
 	}
 
 	if len(parts) == 5 && strings.HasPrefix(strings.ToLower(parts[0]), "redroid") {
+		redroidKey := strings.Join(parts[:4], ";")
+		image, dataTarURL, ok := resolveRedroidMapping(redroidKey, parts[4])
+		if !ok {
+			return InitSpec{}, fmt.Errorf("unsupported redroid spec %q: unknown mapping for %q and profile %q", raw, redroidKey, parts[4])
+		}
+		systemImage := strings.Join([]string{"system-images", parts[1], parts[2], parts[3]}, ";")
 		return InitSpec{
-			Raw:            raw,
-			Kind:           InitKindRedroid,
-			ImageName:      parts[0],
-			AndroidVersion: parts[1],
-			Flavor:         parts[2],
-			Arch:           parts[3],
-			Profile:        parts[4],
+			Raw:               raw,
+			Kind:              InitKindRedroid,
+			APILevel:          parts[1],
+			Tag:               parts[2],
+			ABI:               parts[3],
+			SystemImage:       systemImage,
+			Profile:           parts[4],
+			RedroidImage:      image,
+			RedroidDataTarURL: dataTarURL,
 		}, nil
 	}
 
@@ -91,6 +124,22 @@ func ParseInitSpec(input string) (InitSpec, error) {
 			"or \"redroid<version>;android-<api>;<flavor>;<arch>;<profile>\"",
 		raw,
 	)
+}
+
+func resolveRedroidMapping(redroidKey, profile string) (string, string, bool) {
+	entry, ok := hardcodedRedroidCatalog[normalizeInitKey(redroidKey)]
+	if !ok {
+		return "", "", false
+	}
+	url, ok := entry.DataTarByProfile[normalizeInitKey(profile)]
+	if !ok {
+		return "", "", false
+	}
+	return entry.Image, url, true
+}
+
+func normalizeInitKey(v string) string {
+	return strings.ToLower(strings.TrimSpace(v))
 }
 
 // DefaultInitName returns a deterministic, shell-safe resource name derived from a spec.

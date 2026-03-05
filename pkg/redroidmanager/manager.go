@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,6 +66,7 @@ type dockerClient interface {
 	RemoveContainer(ctx context.Context, name string, force bool) error
 	RunContainer(ctx context.Context, opts dockerRunOptions) (string, error)
 	StopContainer(ctx context.Context, name string) error
+	PullImage(ctx context.Context, image string) error
 }
 
 type dockerSDKClient struct {
@@ -90,6 +92,13 @@ type StartOptions struct {
 	Width  int
 	Height int
 	DPI    int
+}
+
+// InitOptions configures redroid asset initialization.
+type InitOptions struct {
+	Image      string
+	DataTarURL string
+	DataTar    string
 }
 
 // WaitOptions configures readiness checks.
@@ -238,6 +247,38 @@ func (m *Manager) Start(opts StartOptions) (string, error) {
 	})
 }
 
+// Init pulls the configured redroid image and downloads the data-tar.
+func (m *Manager) Init(opts InitOptions) error {
+	if strings.TrimSpace(opts.Image) == "" {
+		return errors.New("empty image")
+	}
+	if strings.TrimSpace(opts.DataTarURL) == "" {
+		return errors.New("empty data tar url")
+	}
+	if strings.TrimSpace(opts.DataTar) == "" {
+		return errors.New("empty data tar path")
+	}
+
+	if err := m.PullImage(opts.Image); err != nil {
+		return fmt.Errorf("pull redroid image: %w", err)
+	}
+	if err := m.downloadDataTar(opts.DataTarURL, opts.DataTar); err != nil {
+		return fmt.Errorf("download data tar: %w", err)
+	}
+	return nil
+}
+
+// PullImage ensures a redroid docker image is present locally.
+func (m *Manager) PullImage(image string) error {
+	if strings.TrimSpace(image) == "" {
+		return errors.New("empty image")
+	}
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		return errors.New("redroid image pull over SSH is not implemented")
+	}
+	return m.docker.PullImage(m.context(), image)
+}
+
 // WaitForBoot waits until framework services are available.
 func (m *Manager) WaitForBoot(opts WaitOptions) error {
 	if strings.TrimSpace(opts.Serial) == "" {
@@ -381,6 +422,39 @@ func (m *Manager) runRemote(args ...string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func (m *Manager) downloadDataTar(url, dst string) error {
+	ctx := m.context()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected HTTP status: %s", resp.Status)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	tmp := dst + ".tmp"
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, dst)
+}
+
 func newDockerSDKClient(env Environment) dockerClient {
 	opts := []client.Opt{
 		client.FromEnv,
@@ -458,6 +532,19 @@ func (d *dockerSDKClient) StopContainer(ctx context.Context, name string) error 
 	}
 	timeout := 15
 	_, err := d.cli.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &timeout})
+	return err
+}
+
+func (d *dockerSDKClient) PullImage(ctx context.Context, image string) error {
+	if d.cli == nil {
+		return errors.New("docker client not initialized")
+	}
+	rc, err := d.cli.ImagePull(ctx, image, client.ImagePullOptions{})
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	_, err = io.Copy(io.Discard, rc)
 	return err
 }
 
@@ -547,5 +634,9 @@ func (d *dockerClientInitError) RunContainer(_ context.Context, _ dockerRunOptio
 }
 
 func (d *dockerClientInitError) StopContainer(_ context.Context, _ string) error {
+	return d.err
+}
+
+func (d *dockerClientInitError) PullImage(_ context.Context, _ string) error {
 	return d.err
 }

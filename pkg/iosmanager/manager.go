@@ -42,6 +42,11 @@ type InitBaseOptions struct {
 	Device  string
 }
 
+type CloneOptions struct {
+	Source string
+	Name   string
+}
+
 type RunOptions struct {
 	Name string
 }
@@ -98,6 +103,14 @@ func (m *Manager) ListRunning() ([]ProcessInfo, error) {
 
 func (m *Manager) InitBase(opts InitBaseOptions) (SimulatorInfo, error) {
 	info, err := ios.InitBase(m.env, opts.Name, opts.Runtime, opts.Device)
+	if err != nil {
+		return SimulatorInfo{}, err
+	}
+	return SimulatorInfo(info), nil
+}
+
+func (m *Manager) Clone(opts CloneOptions) (SimulatorInfo, error) {
+	info, err := ios.Clone(m.env, opts.Source, opts.Name)
 	if err != nil {
 		return SimulatorInfo{}, err
 	}

@@ -131,7 +131,7 @@ func TestShouldAllocateTTYRespectsSSHArgsOverrides(t *testing.T) {
 
 func TestSharedCommandsExposePlatformSubcommands(t *testing.T) {
 	root := newRootCommand("dev")
-	for _, name := range []string{"list", "init-base", "run", "delete", "ps", "status", "stop"} {
+	for _, name := range []string{"list", "init-base", "run", "clone", "delete", "ps", "status", "stop"} {
 		cmd, _, err := root.Find([]string{name, "android"})
 		if err != nil {
 			t.Fatalf("find %s android: %v", name, err)

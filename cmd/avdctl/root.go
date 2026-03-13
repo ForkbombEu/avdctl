@@ -46,6 +46,7 @@ func newRootCommand(version string) *cobra.Command {
 	root.AddCommand(newPlatformListCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformInitBaseCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformRunCommand(androidEnv, iosEnv))
+	root.AddCommand(newPlatformCloneCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformDeleteCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformPSCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformStatusCommand(androidEnv, iosEnv))
@@ -54,7 +55,6 @@ func newRootCommand(version string) *cobra.Command {
 	root.AddCommand(newAndroidPrewarmCommand(androidEnv))
 	root.AddCommand(newAndroidCustomizeStartCommand(androidEnv))
 	root.AddCommand(newAndroidCustomizeFinishCommand(androidEnv))
-	root.AddCommand(newAndroidCloneCommand(androidEnv))
 	root.AddCommand(newAndroidBakeCommand(androidEnv))
 	root.AddCommand(newAndroidStopBluetoothCommand(androidEnv))
 	root.AddCommand(newAndroidCleanupCommand(androidEnv))
@@ -104,6 +104,13 @@ func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Co
 	cmd := newAndroidDeleteCommand("delete", androidEnv)
 	cmd.AddCommand(newAndroidDeleteCommand("android", androidEnv))
 	cmd.AddCommand(newIOSDeleteCommand("ios", iosEnv))
+	return cmd
+}
+
+func newPlatformCloneCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
+	cmd := newAndroidCloneCommand("clone", androidEnv)
+	cmd.AddCommand(newAndroidCloneCommand("android", androidEnv))
+	cmd.AddCommand(newIOSCloneCommand("ios", iosEnv))
 	return cmd
 }
 
@@ -272,6 +279,28 @@ func newIOSRunCommand(use string, env ioscore.Env) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Simulator name or UDID to boot")
+	return cmd
+}
+
+func newIOSCloneCommand(use string, env ioscore.Env) *cobra.Command {
+	var base, name string
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: "Clone a shut down iOS simulator base",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(base) == "" || strings.TrimSpace(name) == "" {
+				return errors.New("--base and --name are required")
+			}
+			info, err := ioscore.Clone(env, base, name)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Clone ready: %s (%s)\n", info.Name, info.UDID)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&base, "base", "", "Base simulator name or UDID")
+	cmd.Flags().StringVar(&name, "name", "", "New clone simulator name")
 	return cmd
 }
 
@@ -642,10 +671,10 @@ func newAndroidCustomizeFinishCommand(env core.Env) *cobra.Command {
 	return cmd
 }
 
-func newAndroidCloneCommand(env core.Env) *cobra.Command {
+func newAndroidCloneCommand(use string, env core.Env) *cobra.Command {
 	var clBase, clName, clGolden string
 	cmd := &cobra.Command{
-		Use:   "clone",
+		Use:   use,
 		Short: "Create clone by copying raw IMG files from golden directory (preserves all customizations)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if clBase == "" || clName == "" {

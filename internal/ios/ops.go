@@ -155,6 +155,34 @@ func InitBase(env Env, name, runtimeID, deviceTypeID string) (Info, error) {
 	return Find(env, udid)
 }
 
+func Clone(env Env, sourceRef, newName string) (Info, error) {
+	if err := EnsureSupported(); err != nil {
+		return Info{}, err
+	}
+	if strings.TrimSpace(sourceRef) == "" {
+		return Info{}, errors.New("empty source simulator reference")
+	}
+	if strings.TrimSpace(newName) == "" {
+		return Info{}, errors.New("empty clone simulator name")
+	}
+	device, _, err := resolveDevice(env, sourceRef)
+	if err != nil {
+		return Info{}, err
+	}
+	if strings.EqualFold(device.State, "Booted") {
+		return Info{}, fmt.Errorf("source simulator %q must be shutdown before cloning", sourceRef)
+	}
+	out, errOut, runErr := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "clone", device.UDID, newName)
+	if runErr != nil {
+		return Info{}, fmt.Errorf("xcrun simctl clone failed: %v\n%s%s", runErr, out, errOut)
+	}
+	udid := strings.TrimSpace(out)
+	if udid != "" {
+		return Find(env, udid)
+	}
+	return Find(env, newName)
+}
+
 func Run(env Env, ref string) (ProcInfo, error) {
 	if err := EnsureSupported(); err != nil {
 		return ProcInfo{}, err

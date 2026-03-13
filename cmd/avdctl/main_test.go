@@ -60,6 +60,31 @@ func TestMainHelpCommand(t *testing.T) {
 	_ = captureStdout(t, main)
 }
 
+func TestRootHelpMentionsPlatformAwareCommands(t *testing.T) {
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"--help"})
+
+	var stdout bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stdout)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("help execution failed: %v", err)
+	}
+
+	help := stdout.String()
+	for _, needle := range []string{
+		"Android is the default",
+		"list, init-base, run, clone, delete, ps, status, stop",
+		"avdctl run ios --name base-ios",
+		"clone            Create a clone; Android by default, or use `clone ios`",
+	} {
+		if !strings.Contains(help, needle) {
+			t.Fatalf("help output missing %q\n%s", needle, help)
+		}
+	}
+}
+
 func TestVersionCommandFallsBackToDev(t *testing.T) {
 	oldArgs := os.Args
 	oldVersion := version

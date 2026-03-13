@@ -24,8 +24,27 @@ func newRootCommand(version string) *cobra.Command {
 	sshArgs := append([]string(nil), androidEnv.SSHArgs...)
 
 	root := &cobra.Command{
-		Use:           "avdctl",
-		Short:         "AVD golden/clone lifecycle tool (Linux, CI-friendly)",
+		Use:   "avdctl",
+		Short: "Manage Android emulators and iOS simulators",
+		Long: `Manage Android emulators and iOS simulators.
+
+Platform-aware commands support explicit platform subcommands:
+  avdctl <command> android ...
+  avdctl <command> ios ...
+
+If no platform is specified, Android is the default.
+
+Shared platform-aware commands:
+  list, init-base, run, clone, delete, ps, status, stop
+
+Android-only commands:
+  save-golden, prewarm, customize-start, customize-finish, bake-apk,
+  stop-bluetooth, cleanup
+`,
+		Example: `  avdctl run --name base-a35
+  avdctl run ios --name base-ios
+  avdctl clone --base base-a35 --name w-demo --golden ~/avd-golden/base-a35
+  avdctl clone ios --base base-ios --name ios-demo`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -81,6 +100,7 @@ func newVersionCommand(root *cobra.Command, version string) *cobra.Command {
 
 func newPlatformListCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidListCommand("list", androidEnv)
+	cmd.Short = "List devices; Android by default, or use `list ios`"
 	cmd.AddCommand(newAndroidListCommand("android", androidEnv))
 	cmd.AddCommand(newIOSListCommand("ios", iosEnv))
 	return cmd
@@ -88,6 +108,7 @@ func newPlatformListCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Comm
 
 func newPlatformInitBaseCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidInitBaseCommand("init-base", androidEnv)
+	cmd.Short = "Create a base device; Android by default, or use `init-base ios`"
 	cmd.AddCommand(newAndroidInitBaseCommand("android", androidEnv))
 	cmd.AddCommand(newIOSInitBaseCommand("ios", iosEnv))
 	return cmd
@@ -95,6 +116,7 @@ func newPlatformInitBaseCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.
 
 func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidRunCommand("run", androidEnv)
+	cmd.Short = "Start a device; Android by default, or use `run ios`"
 	cmd.AddCommand(newAndroidRunCommand("android", androidEnv))
 	cmd.AddCommand(newIOSRunCommand("ios", iosEnv))
 	return cmd
@@ -102,6 +124,7 @@ func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Comma
 
 func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidDeleteCommand("delete", androidEnv)
+	cmd.Short = "Delete a device; Android by default, or use `delete ios`"
 	cmd.AddCommand(newAndroidDeleteCommand("android", androidEnv))
 	cmd.AddCommand(newIOSDeleteCommand("ios", iosEnv))
 	return cmd
@@ -109,6 +132,7 @@ func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Co
 
 func newPlatformCloneCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidCloneCommand("clone", androidEnv)
+	cmd.Short = "Create a clone; Android by default, or use `clone ios`"
 	cmd.AddCommand(newAndroidCloneCommand("android", androidEnv))
 	cmd.AddCommand(newIOSCloneCommand("ios", iosEnv))
 	return cmd
@@ -116,6 +140,7 @@ func newPlatformCloneCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Com
 
 func newPlatformPSCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidPSCommand("ps", androidEnv)
+	cmd.Short = "List running devices; Android by default, or use `ps ios`"
 	cmd.AddCommand(newAndroidPSCommand("android", androidEnv))
 	cmd.AddCommand(newIOSPSCommand("ios", iosEnv))
 	return cmd
@@ -123,6 +148,7 @@ func newPlatformPSCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Comman
 
 func newPlatformStatusCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidStatusCommand("status", androidEnv)
+	cmd.Short = "Show device status; Android by default, or use `status ios`"
 	cmd.AddCommand(newAndroidStatusCommand("android", androidEnv))
 	cmd.AddCommand(newIOSStatusCommand("ios", iosEnv))
 	return cmd
@@ -130,6 +156,7 @@ func newPlatformStatusCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Co
 
 func newPlatformStopCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
 	cmd := newAndroidStopCommand("stop", androidEnv)
+	cmd.Short = "Stop a device; Android by default, or use `stop ios`"
 	cmd.AddCommand(newAndroidStopCommand("android", androidEnv))
 	cmd.AddCommand(newIOSStopCommand("ios", iosEnv))
 	return cmd

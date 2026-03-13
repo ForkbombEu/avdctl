@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -124,5 +126,47 @@ func TestShouldAllocateTTYRespectsSSHArgsOverrides(t *testing.T) {
 	}
 	if shouldAllocateTTY([]string{"-tt"}) {
 		t.Fatal("shouldAllocateTTY should be false when -tt is provided")
+	}
+}
+
+func TestSharedCommandsExposePlatformSubcommands(t *testing.T) {
+	root := newRootCommand("dev")
+	for _, name := range []string{"list", "init-base", "run", "delete", "ps", "status", "stop"} {
+		cmd, _, err := root.Find([]string{name, "android"})
+		if err != nil {
+			t.Fatalf("find %s android: %v", name, err)
+		}
+		if cmd.Name() != "android" {
+			t.Fatalf("expected %s android subcommand, got %s", name, cmd.Name())
+		}
+
+		cmd, _, err = root.Find([]string{name, "ios"})
+		if err != nil {
+			t.Fatalf("find %s ios: %v", name, err)
+		}
+		if cmd.Name() != "ios" {
+			t.Fatalf("expected %s ios subcommand, got %s", name, cmd.Name())
+		}
+	}
+}
+
+func TestIOSCommandFailsOnNonDarwinBuild(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("non-darwin guard is only meaningful for non-darwin builds")
+	}
+
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"list", "ios"})
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected ios command to fail on non-darwin build")
+	}
+	if !strings.Contains(err.Error(), "macOS build of avdctl") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

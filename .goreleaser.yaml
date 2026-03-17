@@ -12,6 +12,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -21,11 +22,17 @@ builds:
 
 archives:
   - id: default
-    ids:
+    builds:
       - avdctl
-    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ if eq .Arch \"amd64\" }}x86_64{{ else if and (eq .Os \"linux\") (eq .Arch \"arm64\") }}aarch64{{ else }}{{ .Arch }}{{ end }}"
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
 checksum:
   name_template: checksums.txt
+
+changelog:
+  disable: true
 
 sboms:
   - id: archives

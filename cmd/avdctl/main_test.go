@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	core "github.com/forkbombeu/avdctl/internal/avd"
+	ioscore "github.com/forkbombeu/avdctl/internal/ios"
 	"github.com/spf13/cobra"
 )
 
@@ -74,10 +76,11 @@ func TestRootHelpMentionsPlatformAwareCommands(t *testing.T) {
 
 	help := stdout.String()
 	for _, needle := range []string{
-		"Android is the default",
+		"list and ps include both Android and iOS devices",
+		"run, status, stop, and delete auto-detect the platform by name/reference",
 		"list, init-base, run, clone, delete, ps, status, stop",
 		"avdctl run ios --name base-ios",
-		"clone            Create a clone; Android by default, or use `clone ios`",
+		"run              Start a device; auto-detect platform by name, or use `run android|ios`",
 	} {
 		if !strings.Contains(help, needle) {
 			t.Fatalf("help output missing %q\n%s", needle, help)
@@ -193,5 +196,157 @@ func TestIOSCommandFailsOnNonDarwinBuild(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "macOS build of avdctl") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPlatformListWithoutPlatformCombinesBothJSON(t *testing.T) {
+	restore := restorePlatformHelperStubs()
+	t.Cleanup(restore)
+
+	androidListFn = func(core.Env) ([]core.Info, error) {
+		return []core.Info{{Name: "pixel-a"}}, nil
+	}
+	iosEnsureSupportedFn = func() error { return nil }
+	iosListFn = func(ioscore.Env) ([]ioscore.Info, error) {
+		return []ioscore.Info{{Name: "iphone-a", UDID: "ios-1"}}, nil
+	}
+
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"list", "--json"})
+
+	stdout := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("list execution failed: %v", err)
+		}
+	})
+	for _, needle := range []string{`"android"`, `"ios"`, `"pixel-a"`, `"iphone-a"`} {
+		if !strings.Contains(stdout, needle) {
+			t.Fatalf("combined list output missing %q\n%s", needle, stdout)
+		}
+	}
+}
+
+func TestPlatformRunWithoutPlatformPrefersAndroidOnNameCollision(t *testing.T) {
+	restore := restorePlatformHelperStubs()
+	t.Cleanup(restore)
+
+	androidListFn = func(core.Env) ([]core.Info, error) {
+		return []core.Info{{Name: "shared"}}, nil
+	}
+	androidRunAVDFn = func(core.Env, string) (string, error) {
+		return "emulator-5580", nil
+	}
+	iosEnsureSupportedFn = func() error { return nil }
+	iosListFn = func(ioscore.Env) ([]ioscore.Info, error) {
+		return []ioscore.Info{{Name: "shared", UDID: "ios-shared"}}, nil
+	}
+	iosRunFn = func(ioscore.Env, string) (ioscore.ProcInfo, error) {
+		t.Fatal("ios run should not be called when android name collides")
+		return ioscore.ProcInfo{}, nil
+	}
+
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"run", "--name", "shared"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("run execution failed: %v", err)
+	}
+}
+
+func TestPlatformDeleteWithoutPlatformFallsBackToIOS(t *testing.T) {
+	restore := restorePlatformHelperStubs()
+	t.Cleanup(restore)
+
+	androidListFn = func(core.Env) ([]core.Info, error) {
+		return nil, nil
+	}
+	iosEnsureSupportedFn = func() error { return nil }
+	iosListFn = func(ioscore.Env) ([]ioscore.Info, error) {
+		return []ioscore.Info{{Name: "ios-only", UDID: "ios-1"}}, nil
+	}
+
+	deleted := ""
+	iosDeleteFn = func(_ ioscore.Env, ref string) error {
+		deleted = ref
+		return nil
+	}
+
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"delete", "ios-only"})
+
+	stdout := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("delete execution failed: %v", err)
+		}
+	})
+	if deleted != "ios-only" {
+		t.Fatalf("expected ios delete to receive ios-only, got %q", deleted)
+	}
+	if !strings.Contains(stdout, "Deleted ios-only") {
+		t.Fatalf("unexpected delete output: %s", stdout)
+	}
+}
+
+func TestPlatformStatusAllWithoutPlatformCombinesBoth(t *testing.T) {
+	restore := restorePlatformHelperStubs()
+	t.Cleanup(restore)
+
+	androidListFn = func(core.Env) ([]core.Info, error) {
+		return []core.Info{{Name: "pixel-a"}}, nil
+	}
+	androidListRunningFn = func(core.Env) ([]core.ProcInfo, error) {
+		return []core.ProcInfo{{Name: "pixel-a", Serial: "emulator-5580", Port: 5580, PID: 10, Booted: true}}, nil
+	}
+	iosEnsureSupportedFn = func() error { return nil }
+	iosListFn = func(ioscore.Env) ([]ioscore.Info, error) {
+		return []ioscore.Info{{Name: "iphone-a", UDID: "ios-1", State: "Shutdown"}}, nil
+	}
+
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"status", "--all"})
+
+	stdout := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("status execution failed: %v", err)
+		}
+	})
+	for _, needle := range []string{"Android", "pixel-a", "iOS", "iphone-a"} {
+		if !strings.Contains(stdout, needle) {
+			t.Fatalf("combined status output missing %q\n%s", needle, stdout)
+		}
+	}
+}
+
+func TestPlatformStopWithoutPlatformFallsBackToIOS(t *testing.T) {
+	restore := restorePlatformHelperStubs()
+	t.Cleanup(restore)
+
+	androidListFn = func(core.Env) ([]core.Info, error) {
+		return nil, nil
+	}
+	iosEnsureSupportedFn = func() error { return nil }
+	iosListFn = func(ioscore.Env) ([]ioscore.Info, error) {
+		return []ioscore.Info{{Name: "ios-only", UDID: "ios-1"}}, nil
+	}
+
+	stopped := ""
+	iosStopFn = func(_ ioscore.Env, ref string) error {
+		stopped = ref
+		return nil
+	}
+
+	root := newRootCommand("dev")
+	root.SetArgs([]string{"stop", "--name", "ios-only"})
+
+	stdout := captureStdout(t, func() {
+		if err := root.Execute(); err != nil {
+			t.Fatalf("stop execution failed: %v", err)
+		}
+	})
+	if stopped != "ios-only" {
+		t.Fatalf("expected ios stop to receive ios-only, got %q", stopped)
+	}
+	if !strings.Contains(stdout, "Stopped ios-only") {
+		t.Fatalf("unexpected stop output: %s", stdout)
 	}
 }

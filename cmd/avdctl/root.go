@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,16 +31,22 @@ Platform-aware commands support explicit platform subcommands:
   avdctl <command> android ...
   avdctl <command> ios ...
 
-If no platform is specified, Android is the default.
+If no platform is specified:
+  - list and ps include both Android and iOS devices
+  - status --all includes both Android and iOS devices
+  - run, status, stop, and delete auto-detect the platform by name/reference
+  - when Android and iOS share the same name, Android wins
+  - init-base and clone still default to Android
 
 Shared platform-aware commands:
   list, init-base, run, clone, delete, ps, status, stop
 
 Android-only commands:
-  save-golden, prewarm, customize-start, customize-finish, bake-apk,
+	save-golden, prewarm, customize-start, customize-finish, bake-apk,
   stop-bluetooth, cleanup
 `,
-		Example: `  avdctl run --name base-a35
+		Example: `  avdctl list
+  avdctl run --name base-a35
   avdctl run ios --name base-ios
   avdctl clone --base base-a35 --name w-demo --golden ~/avd-golden/base-a35
   avdctl clone ios --base base-ios --name ios-demo`,
@@ -99,8 +104,36 @@ func newVersionCommand(root *cobra.Command, version string) *cobra.Command {
 }
 
 func newPlatformListCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
-	cmd := newAndroidListCommand("list", androidEnv)
-	cmd.Short = "List devices; Android by default, or use `list ios`"
+	var listJSON bool
+	cmd := &cobra.Command{
+		Use:   "list",
+		Short: "List Android and iOS devices, or use `list android|ios`",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			androidInfos, err := androidListFn(androidEnv)
+			if err != nil {
+				return err
+			}
+			iosInfos, err := iosListIfSupported(iosEnv)
+			if err != nil {
+				return err
+			}
+			if listJSON {
+				return encodeJSON(platformListOutput{
+					Android: androidInfos,
+					IOS:     iosInfos,
+				})
+			}
+			fmt.Println("Android")
+			printAndroidList(androidInfos)
+			if iosInfos != nil {
+				fmt.Println()
+				fmt.Println("iOS")
+				printIOSList(iosInfos)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&listJSON, "json", false, "output JSON")
 	cmd.AddCommand(newAndroidListCommand("android", androidEnv))
 	cmd.AddCommand(newIOSListCommand("ios", iosEnv))
 	return cmd
@@ -115,16 +148,56 @@ func newPlatformInitBaseCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.
 }
 
 func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
-	cmd := newAndroidRunCommand("run", androidEnv)
-	cmd.Short = "Start a device; Android by default, or use `run ios`"
+	var name string
+	var port int
+	cmd := &cobra.Command{
+		Use:   "run",
+		Short: "Start a device; auto-detect platform by name, or use `run android|ios`",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(name) == "" {
+				return errors.New("--name is required")
+			}
+			_, androidFound, androidErr := findAndroidInfo(androidEnv, name)
+			_, iosFound, iosErr := findIOSInfo(iosEnv, name)
+			platform, err := resolveTargetPlatform(androidFound, iosFound, name, androidErr, iosErr)
+			if err != nil {
+				return err
+			}
+			if platform == "ios" {
+				if port != 0 {
+					return errors.New("--port is only supported for Android emulators")
+				}
+				return runIOSWithOutput(iosEnv, name)
+			}
+			return runAndroidWithOutput(androidEnv, name, port)
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "Device name or iOS simulator UDID")
+	cmd.Flags().IntVar(&port, "port", 0, "even TCP port to bind Android emulator (auto if omitted)")
 	cmd.AddCommand(newAndroidRunCommand("android", androidEnv))
 	cmd.AddCommand(newIOSRunCommand("ios", iosEnv))
 	return cmd
 }
 
 func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
-	cmd := newAndroidDeleteCommand("delete", androidEnv)
-	cmd.Short = "Delete a device; Android by default, or use `delete ios`"
+	cmd := &cobra.Command{
+		Use:   "delete NAME_OR_UDID",
+		Short: "Delete a device; auto-detect platform by ref, or use `delete android|ios`",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := args[0]
+			_, androidFound, androidErr := findAndroidInfo(androidEnv, ref)
+			_, iosFound, iosErr := findIOSInfo(iosEnv, ref)
+			platform, err := resolveTargetPlatform(androidFound, iosFound, ref, androidErr, iosErr)
+			if err != nil {
+				return err
+			}
+			if platform == "ios" {
+				return deleteIOSWithOutput(iosEnv, ref)
+			}
+			return deleteAndroidWithOutput(androidEnv, ref)
+		},
+	}
 	cmd.AddCommand(newAndroidDeleteCommand("android", androidEnv))
 	cmd.AddCommand(newIOSDeleteCommand("ios", iosEnv))
 	return cmd
@@ -139,24 +212,124 @@ func newPlatformCloneCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Com
 }
 
 func newPlatformPSCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
-	cmd := newAndroidPSCommand("ps", androidEnv)
-	cmd.Short = "List running devices; Android by default, or use `ps ios`"
+	var psJSON bool
+	cmd := &cobra.Command{
+		Use:   "ps",
+		Short: "List running Android and iOS devices, or use `ps android|ios`",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			androidProcs, err := androidListRunningFn(androidEnv)
+			if err != nil {
+				return err
+			}
+			iosProcs, err := iosListRunningIfSupported(iosEnv)
+			if err != nil {
+				return err
+			}
+			if psJSON {
+				return encodeJSON(platformPSOutput{
+					Android: androidProcs,
+					IOS:     iosProcs,
+				})
+			}
+			fmt.Println("Android")
+			printAndroidPS(androidProcs)
+			if iosProcs != nil {
+				fmt.Println()
+				fmt.Println("iOS")
+				printIOSPS(iosProcs)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&psJSON, "json", false, "output JSON")
 	cmd.AddCommand(newAndroidPSCommand("android", androidEnv))
 	cmd.AddCommand(newIOSPSCommand("ios", iosEnv))
 	return cmd
 }
 
 func newPlatformStatusCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
-	cmd := newAndroidStatusCommand("status", androidEnv)
-	cmd.Short = "Show device status; Android by default, or use `status ios`"
+	var name, serial, udid string
+	var all bool
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: "Show device status; auto-detect platform by ref, or use `status android|ios`",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if all {
+				fmt.Println("Android")
+				if err := printAndroidStatusAll(androidEnv); err != nil {
+					return err
+				}
+				iosInfos, err := iosListIfSupported(iosEnv)
+				if err != nil {
+					return err
+				}
+				if iosInfos != nil {
+					fmt.Println()
+					fmt.Println("iOS")
+					return printIOSStatusAll(iosEnv)
+				}
+				return nil
+			}
+			if strings.TrimSpace(serial) != "" {
+				return printAndroidStatus(androidEnv, "", serial)
+			}
+			if strings.TrimSpace(udid) != "" {
+				return printIOSStatus(iosEnv, udid)
+			}
+			if strings.TrimSpace(name) == "" {
+				return errors.New("use --name, --serial, --udid, or --all")
+			}
+			_, androidFound, androidErr := findAndroidInfo(androidEnv, name)
+			_, iosFound, iosErr := findIOSInfo(iosEnv, name)
+			platform, err := resolveTargetPlatform(androidFound, iosFound, name, androidErr, iosErr)
+			if err != nil {
+				return err
+			}
+			if platform == "ios" {
+				return printIOSStatus(iosEnv, name)
+			}
+			return printAndroidStatus(androidEnv, name, "")
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "Device name")
+	cmd.Flags().StringVar(&serial, "serial", "", "Android emulator serial (e.g., emulator-5582)")
+	cmd.Flags().StringVar(&udid, "udid", "", "iOS simulator UDID")
+	cmd.Flags().BoolVar(&all, "all", false, "list all Android and iOS devices with state")
 	cmd.AddCommand(newAndroidStatusCommand("android", androidEnv))
 	cmd.AddCommand(newIOSStatusCommand("ios", iosEnv))
 	return cmd
 }
 
 func newPlatformStopCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
-	cmd := newAndroidStopCommand("stop", androidEnv)
-	cmd.Short = "Stop a device; Android by default, or use `stop ios`"
+	var name, serial, udid string
+	cmd := &cobra.Command{
+		Use:   "stop",
+		Short: "Stop a device; auto-detect platform by ref, or use `stop android|ios`",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if strings.TrimSpace(serial) != "" {
+				return stopAndroidWithOutput(androidEnv, "", serial)
+			}
+			if strings.TrimSpace(udid) != "" {
+				return stopIOSWithOutput(iosEnv, udid)
+			}
+			if strings.TrimSpace(name) == "" {
+				return errors.New("use --name, --serial, or --udid")
+			}
+			_, androidFound, androidErr := findAndroidInfo(androidEnv, name)
+			_, iosFound, iosErr := findIOSInfo(iosEnv, name)
+			platform, err := resolveTargetPlatform(androidFound, iosFound, name, androidErr, iosErr)
+			if err != nil {
+				return err
+			}
+			if platform == "ios" {
+				return stopIOSWithOutput(iosEnv, name)
+			}
+			return stopAndroidWithOutput(androidEnv, name, "")
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "", "Device name")
+	cmd.Flags().StringVar(&serial, "serial", "", "Android emulator serial (e.g., emulator-5582)")
+	cmd.Flags().StringVar(&udid, "udid", "", "iOS simulator UDID")
 	cmd.AddCommand(newAndroidStopCommand("android", androidEnv))
 	cmd.AddCommand(newIOSStopCommand("ios", iosEnv))
 	return cmd
@@ -168,18 +341,14 @@ func newAndroidListCommand(use string, env core.Env) *cobra.Command {
 		Use:   use,
 		Short: "List Android AVDs under ANDROID_AVD_HOME",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ls, err := core.List(env)
+			ls, err := androidListFn(env)
 			if err != nil {
 				return err
 			}
 			if listJSON {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(ls)
+				return encodeJSON(ls)
 			}
-			for _, i := range ls {
-				fmt.Printf("%-18s %s\n  userdata: %s (%d bytes)\n", i.Name, i.Path, i.Userdata, i.SizeBytes)
-			}
+			printAndroidList(ls)
 			return nil
 		},
 	}
@@ -193,18 +362,14 @@ func newIOSListCommand(use string, env ioscore.Env) *cobra.Command {
 		Use:   use,
 		Short: "List iOS simulators",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ls, err := ioscore.List(env)
+			ls, err := iosListFn(env)
 			if err != nil {
 				return err
 			}
 			if listJSON {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(ls)
+				return encodeJSON(ls)
 			}
-			for _, i := range ls {
-				fmt.Printf("%-24s %-12s %s\n  runtime: %s\n  path: %s (%d bytes)\n", i.Name, i.State, i.UDID, i.Runtime, i.Path, i.SizeBytes)
-			}
+			printIOSList(ls)
 			return nil
 		},
 	}
@@ -265,22 +430,7 @@ func newAndroidRunCommand(use string, env core.Env) *cobra.Command {
 		Use:   use,
 		Short: "Run an Android AVD headless (no snapshots); supports parallel instances",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if runName == "" {
-				return fmt.Errorf("--name is required")
-			}
-			if runPort > 0 {
-				if runPort%2 != 0 {
-					return fmt.Errorf("--port must be even")
-				}
-				_, _, logPath, err := core.StartEmulatorOnPort(env, runName, runPort)
-				if err != nil {
-					return err
-				}
-				fmt.Printf("Started %s on emulator-%d (log: %s)\n", runName, runPort, logPath)
-				return nil
-			}
-			_, err := core.RunAVD(env, runName)
-			return err
+			return runAndroidWithOutput(env, runName, runPort)
 		},
 	}
 	cmd.Flags().StringVar(&runName, "name", "", "AVD name to run")
@@ -294,15 +444,7 @@ func newIOSRunCommand(use string, env ioscore.Env) *cobra.Command {
 		Use:   use,
 		Short: "Boot an iOS simulator",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(name) == "" {
-				return errors.New("--name is required")
-			}
-			proc, err := ioscore.Run(env, name)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Started %s on %s\n", proc.Name, proc.UDID)
-			return nil
+			return runIOSWithOutput(env, name)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Simulator name or UDID to boot")
@@ -348,11 +490,7 @@ func newIOSDeleteCommand(use string, env ioscore.Env) *cobra.Command {
 		Short: "Delete an iOS simulator",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := ioscore.Delete(env, args[0]); err != nil {
-				return err
-			}
-			fmt.Printf("Deleted %s\n", args[0])
-			return nil
+			return deleteIOSWithOutput(env, args[0])
 		},
 	}
 }
@@ -363,26 +501,14 @@ func newAndroidPSCommand(use string, env core.Env) *cobra.Command {
 		Use:   use,
 		Short: "List running Android emulators with AVD name, serial, port, PID",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			procs, err := core.ListRunning(env)
+			procs, err := androidListRunningFn(env)
 			if err != nil {
 				return err
 			}
 			if psJSON {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(procs)
+				return encodeJSON(procs)
 			}
-			if len(procs) == 0 {
-				fmt.Println("(no emulators)")
-				return nil
-			}
-			for _, p := range procs {
-				state := "booting"
-				if p.Booted {
-					state = "ready"
-				}
-				fmt.Printf("%-18s %-14s port=%-5d pid=%-7d %s\n", p.Name, p.Serial, p.Port, p.PID, state)
-			}
+			printAndroidPS(procs)
 			return nil
 		},
 	}
@@ -396,22 +522,14 @@ func newIOSPSCommand(use string, env ioscore.Env) *cobra.Command {
 		Use:   use,
 		Short: "List booted iOS simulators",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			procs, err := ioscore.ListRunning(env)
+			procs, err := iosListRunningFn(env)
 			if err != nil {
 				return err
 			}
 			if psJSON {
-				enc := json.NewEncoder(os.Stdout)
-				enc.SetIndent("", "  ")
-				return enc.Encode(procs)
+				return encodeJSON(procs)
 			}
-			if len(procs) == 0 {
-				fmt.Println("(no simulators)")
-				return nil
-			}
-			for _, p := range procs {
-				fmt.Printf("%-24s %-36s %s\n", p.Name, p.UDID, p.Runtime)
-			}
+			printIOSPS(procs)
 			return nil
 		},
 	}
@@ -427,65 +545,9 @@ func newAndroidStatusCommand(use string, env core.Env) *cobra.Command {
 		Short: "Show status for a running Android emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if stAll {
-				all, err := core.List(env)
-				if err != nil {
-					return err
-				}
-				running, err := core.ListRunning(env)
-				if err != nil {
-					return err
-				}
-				runningByName := make(map[string]core.ProcInfo, len(running))
-				for _, proc := range running {
-					if proc.Name != "" {
-						runningByName[proc.Name] = proc
-					}
-				}
-				if len(all) == 0 {
-					fmt.Println("(no avds)")
-					return nil
-				}
-				for _, info := range all {
-					proc, ok := runningByName[info.Name]
-					state := "stopped"
-					serial := "-"
-					port := "-"
-					pid := "-"
-					if ok {
-						state = "booting"
-						if proc.Booted {
-							state = "ready"
-						}
-						serial = proc.Serial
-						port = fmt.Sprintf("%d", proc.Port)
-						pid = fmt.Sprintf("%d", proc.PID)
-					}
-					fmt.Printf("%-18s %-14s port=%-5s pid=%-7s %s\n", info.Name, serial, port, pid, state)
-				}
-				return nil
+				return printAndroidStatusAll(env)
 			}
-
-			if stName == "" && stSerial == "" {
-				return fmt.Errorf("use --name, --serial, or --all")
-			}
-
-			procs, err := core.ListRunning(env)
-			if err != nil {
-				return err
-			}
-
-			var pick *core.ProcInfo
-			for _, p := range procs {
-				if (stName != "" && p.Name == stName) || (stSerial != "" && p.Serial == stSerial) {
-					pick = &p
-					break
-				}
-			}
-			if pick == nil {
-				return fmt.Errorf("not found (name=%q serial=%q)", stName, stSerial)
-			}
-			fmt.Printf("Name:   %s\nSerial: %s\nPort:   %d\nPID:    %d\nBooted: %v\n", pick.Name, pick.Serial, pick.Port, pick.PID, pick.Booted)
-			return nil
+			return printAndroidStatus(env, stName, stSerial)
 		},
 	}
 	cmd.Flags().StringVar(&stName, "name", "", "AVD name")
@@ -502,32 +564,13 @@ func newIOSStatusCommand(use string, env ioscore.Env) *cobra.Command {
 		Short: "Show status for an iOS simulator by --name or --udid",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if all {
-				allInfos, err := ioscore.List(env)
-				if err != nil {
-					return err
-				}
-				if len(allInfos) == 0 {
-					fmt.Println("(no simulators)")
-					return nil
-				}
-				for _, info := range allInfos {
-					fmt.Printf("%-24s %-12s %s\n", info.Name, info.State, info.UDID)
-				}
-				return nil
+				return printIOSStatusAll(env)
 			}
 			ref := strings.TrimSpace(name)
 			if ref == "" {
 				ref = strings.TrimSpace(udid)
 			}
-			if ref == "" {
-				return errors.New("use --name, --udid, or --all")
-			}
-			info, err := ioscore.Find(env, ref)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Name:    %s\nUDID:    %s\nRuntime: %s\nState:   %s\nPath:    %s\n", info.Name, info.UDID, info.Runtime, info.State, info.Path)
-			return nil
+			return printIOSStatus(env, ref)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Simulator name")
@@ -542,30 +585,7 @@ func newAndroidStopCommand(use string, env core.Env) *cobra.Command {
 		Use:   use,
 		Short: "Stop a running Android emulator by --name or --serial",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if stopSerial == "" && stopName == "" {
-				return fmt.Errorf("use --name or --serial")
-			}
-			serial := stopSerial
-			if serial == "" {
-				procs, err := core.ListRunning(env)
-				if err != nil {
-					return err
-				}
-				for _, p := range procs {
-					if p.Name == stopName {
-						serial = p.Serial
-						break
-					}
-				}
-				if serial == "" {
-					return fmt.Errorf("no running emulator named %s", stopName)
-				}
-			}
-			if err := core.StopBySerial(env, serial); err != nil {
-				return err
-			}
-			fmt.Printf("Stopped %s\n", serial)
-			return nil
+			return stopAndroidWithOutput(env, stopName, stopSerial)
 		},
 	}
 	cmd.Flags().StringVar(&stopName, "name", "", "AVD name")
@@ -583,14 +603,7 @@ func newIOSStopCommand(use string, env ioscore.Env) *cobra.Command {
 			if ref == "" {
 				ref = strings.TrimSpace(udid)
 			}
-			if ref == "" {
-				return errors.New("use --name or --udid")
-			}
-			if err := ioscore.Stop(env, ref); err != nil {
-				return err
-			}
-			fmt.Printf("Stopped %s\n", ref)
-			return nil
+			return stopIOSWithOutput(env, ref)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Simulator name")

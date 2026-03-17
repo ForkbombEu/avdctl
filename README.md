@@ -104,8 +104,13 @@ The following commands support both platforms:
 You can call them in either of these forms:
 
 ```bash
-# Android is the default when the platform is omitted
+# Omitted platform behavior
+# - list / ps return both Android and iOS
+# - status --all returns both Android and iOS
+# - run / status / stop / delete auto-detect by name or ref
+# - Android wins if Android and iOS share the same name
 ./bin/avdctl run --name base-a35
+./bin/avdctl list
 ./bin/avdctl clone --base base-a35 --name w-demo --golden ~/avd-golden/base-a35
 
 # Explicit platform selection

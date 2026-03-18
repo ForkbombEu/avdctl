@@ -80,7 +80,8 @@ func TestRootHelpMentionsPlatformAwareCommands(t *testing.T) {
 		"run, status, stop, and delete auto-detect the platform by name/reference",
 		"list, init-base, run, clone, delete, ps, status, stop",
 		"avdctl run ios --name base-ios",
-		"run              Start a device; auto-detect platform by name, or use `run android|ios`",
+		"avdctl run redroid --name redroid15 --data-dir ~/redroid-data --data-tar ~/redroid-data.tar",
+		"run              Start a device; auto-detect android/ios by name, or use `run android|ios|redroid`",
 	} {
 		if !strings.Contains(help, needle) {
 			t.Fatalf("help output missing %q\n%s", needle, help)
@@ -176,6 +177,16 @@ func TestSharedCommandsExposePlatformSubcommands(t *testing.T) {
 			t.Fatalf("expected %s ios subcommand, got %s", name, cmd.Name())
 		}
 	}
+
+	for _, name := range []string{"run", "delete", "stop"} {
+		cmd, _, err := root.Find([]string{name, "redroid"})
+		if err != nil {
+			t.Fatalf("find %s redroid: %v", name, err)
+		}
+		if cmd.Name() != "redroid" {
+			t.Fatalf("expected %s redroid subcommand, got %s", name, cmd.Name())
+		}
+	}
 }
 
 func TestIOSCommandFailsOnNonDarwinBuild(t *testing.T) {
@@ -196,6 +207,14 @@ func TestIOSCommandFailsOnNonDarwinBuild(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "macOS build of avdctl") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNoTopLevelRedroidCommand(t *testing.T) {
+	root := newRootCommand("dev")
+	cmd, _, err := root.Find([]string{"redroid"})
+	if err == nil && cmd != nil && cmd.Name() == "redroid" {
+		t.Fatal("did not expect a top-level redroid command")
 	}
 }
 

@@ -11,25 +11,27 @@ import (
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
 	ioscore "github.com/forkbombeu/avdctl/internal/ios"
+	redroidcore "github.com/forkbombeu/avdctl/internal/redroid"
 	"github.com/forkbombeu/avdctl/internal/remoteavdctl"
-	"github.com/forkbombeu/avdctl/pkg/redroidmanager"
 	"github.com/spf13/cobra"
 )
 
 func newRootCommand(version string) *cobra.Command {
 	androidEnv := core.Detect()
 	iosEnv := ioscore.Detect()
+	redroidEnv := redroidcore.Detect()
 	sshTarget := strings.TrimSpace(androidEnv.SSHTarget)
 	sshArgs := append([]string(nil), androidEnv.SSHArgs...)
 
 	root := &cobra.Command{
 		Use:   "avdctl",
-		Short: "Manage Android emulators and iOS simulators",
-		Long: `Manage Android emulators and iOS simulators.
+		Short: "Manage Android emulators, iOS simulators, and Redroid containers",
+		Long: `Manage Android emulators, iOS simulators, and Redroid containers.
 
 Platform-aware commands support explicit platform subcommands:
   avdctl <command> android ...
   avdctl <command> ios ...
+  avdctl <command> redroid ...   (run/stop/delete only)
 
 If no platform is specified:
   - list and ps include both Android and iOS devices
@@ -48,6 +50,7 @@ Android-only commands:
 		Example: `  avdctl list
   avdctl run --name base-a35
   avdctl run ios --name base-ios
+  avdctl run redroid --name redroid15 --data-dir ~/redroid-data --data-tar ~/redroid-data.tar
   avdctl clone --base base-a35 --name w-demo --golden ~/avd-golden/base-a35
   avdctl clone ios --base base-ios --name ios-demo`,
 		SilenceErrors: true,
@@ -69,12 +72,12 @@ Android-only commands:
 	root.AddCommand(newVersionCommand(root, version))
 	root.AddCommand(newPlatformListCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformInitBaseCommand(androidEnv, iosEnv))
-	root.AddCommand(newPlatformRunCommand(androidEnv, iosEnv))
+	root.AddCommand(newPlatformRunCommand(androidEnv, iosEnv, redroidEnv))
 	root.AddCommand(newPlatformCloneCommand(androidEnv, iosEnv))
-	root.AddCommand(newPlatformDeleteCommand(androidEnv, iosEnv))
+	root.AddCommand(newPlatformDeleteCommand(androidEnv, iosEnv, redroidEnv))
 	root.AddCommand(newPlatformPSCommand(androidEnv, iosEnv))
 	root.AddCommand(newPlatformStatusCommand(androidEnv, iosEnv))
-	root.AddCommand(newPlatformStopCommand(androidEnv, iosEnv))
+	root.AddCommand(newPlatformStopCommand(androidEnv, iosEnv, redroidEnv))
 	root.AddCommand(newAndroidSaveGoldenCommand(androidEnv))
 	root.AddCommand(newAndroidPrewarmCommand(androidEnv))
 	root.AddCommand(newAndroidCustomizeStartCommand(androidEnv))
@@ -82,8 +85,6 @@ Android-only commands:
 	root.AddCommand(newAndroidBakeCommand(androidEnv))
 	root.AddCommand(newAndroidStopBluetoothCommand(androidEnv))
 	root.AddCommand(newAndroidCleanupCommand(androidEnv))
-	root.AddCommand(newRedroidCommand())
-
 	return root
 }
 
@@ -147,12 +148,12 @@ func newPlatformInitBaseCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.
 	return cmd
 }
 
-func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
+func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env, redroidEnv redroidcore.Env) *cobra.Command {
 	var name string
 	var port int
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "Start a device; auto-detect platform by name, or use `run android|ios`",
+		Short: "Start a device; auto-detect android/ios by name, or use `run android|ios|redroid`",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(name) == "" {
 				return errors.New("--name is required")
@@ -176,13 +177,14 @@ func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Comma
 	cmd.Flags().IntVar(&port, "port", 0, "even TCP port to bind Android emulator (auto if omitted)")
 	cmd.AddCommand(newAndroidRunCommand("android", androidEnv))
 	cmd.AddCommand(newIOSRunCommand("ios", iosEnv))
+	cmd.AddCommand(newRedroidRunCommand("redroid", redroidEnv))
 	return cmd
 }
 
-func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
+func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env, redroidEnv redroidcore.Env) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete NAME_OR_UDID",
-		Short: "Delete a device; auto-detect platform by ref, or use `delete android|ios`",
+		Short: "Delete a device; auto-detect android/ios by ref, or use `delete android|ios|redroid`",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref := args[0]
@@ -200,6 +202,7 @@ func newPlatformDeleteCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Co
 	}
 	cmd.AddCommand(newAndroidDeleteCommand("android", androidEnv))
 	cmd.AddCommand(newIOSDeleteCommand("ios", iosEnv))
+	cmd.AddCommand(newRedroidDeleteCommand("redroid", redroidEnv))
 	return cmd
 }
 
@@ -300,11 +303,11 @@ func newPlatformStatusCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Co
 	return cmd
 }
 
-func newPlatformStopCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Command {
+func newPlatformStopCommand(androidEnv core.Env, iosEnv ioscore.Env, redroidEnv redroidcore.Env) *cobra.Command {
 	var name, serial, udid string
 	cmd := &cobra.Command{
 		Use:   "stop",
-		Short: "Stop a device; auto-detect platform by ref, or use `stop android|ios`",
+		Short: "Stop a device; auto-detect android/ios by ref, or use `stop android|ios|redroid`",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if strings.TrimSpace(serial) != "" {
 				return stopAndroidWithOutput(androidEnv, "", serial)
@@ -332,6 +335,7 @@ func newPlatformStopCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.Comm
 	cmd.Flags().StringVar(&udid, "udid", "", "iOS simulator UDID")
 	cmd.AddCommand(newAndroidStopCommand("android", androidEnv))
 	cmd.AddCommand(newIOSStopCommand("ios", iosEnv))
+	cmd.AddCommand(newRedroidStopCommand("redroid", redroidEnv))
 	return cmd
 }
 
@@ -853,28 +857,32 @@ func newAndroidCleanupCommand(env core.Env) *cobra.Command {
 	return cmd
 }
 
-func newRedroidCommand() *cobra.Command {
-	configDir := ""
-	if c, err := os.UserConfigDir(); err == nil {
-		configDir = c
-	}
-	defaultRedroidDir := filepath.Join(configDir, "avdctl", "golden")
-	defaultDataDir := filepath.Join(defaultRedroidDir, "redroid-data")
-	defaultDataTar := filepath.Join(defaultRedroidDir, "redroid-data.tar")
-	redroidCmd := &cobra.Command{
-		Use:   "redroid",
-		Short: "Manage Redroid docker containers",
-	}
+func newRedroidRunCommand(use string, env redroidcore.Env) *cobra.Command {
+	defaultDataDir := redroidcore.DefaultDataDir()
+	defaultDataTar := redroidcore.DefaultDataTar()
 
 	var rdName, rdImage, rdDataDir, rdDataTar, rdShmSize, rdMemory, rdCPUs, rdBinderFS string
+	var rdSerial string
 	var rdSudo bool
+	var rdWait bool
 	var rdPort, rdWidth, rdHeight, rdDPI int
-	redroidStartCmd := &cobra.Command{
-		Use:   "start",
-		Short: "Restore redroid data tar and start Redroid container",
+	var rdWaitTimeout, rdWaitPoll time.Duration
+	cmd := &cobra.Command{
+		Use:   use,
+		Short: "Start a Redroid container, optionally waiting for readiness",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := redroidmanager.New()
-			containerID, err := mgr.Start(redroidmanager.StartOptions{
+			if rdWait && strings.TrimSpace(rdName) == "" {
+				serial := strings.TrimSpace(rdSerial)
+				if serial == "" {
+					serial = "127.0.0.1:5555"
+				}
+				return waitForRedroidWithOutput(env, redroidcore.WaitOptions{
+					Serial:       serial,
+					Timeout:      rdWaitTimeout,
+					PollInterval: rdWaitPoll,
+				})
+			}
+			opts := redroidcore.StartOptions{
 				Name:     rdName,
 				Image:    rdImage,
 				DataDir:  rdDataDir,
@@ -888,95 +896,68 @@ func newRedroidCommand() *cobra.Command {
 				Width:    rdWidth,
 				Height:   rdHeight,
 				DPI:      rdDPI,
-			})
-			if err != nil {
+			}
+			if err := startRedroidWithOutput(env, opts); err != nil {
 				return err
 			}
-			if containerID == "" {
-				fmt.Printf("Started %s\n", rdName)
+			if !rdWait {
 				return nil
 			}
-			fmt.Printf("Started %s (%s)\n", rdName, containerID)
-			return nil
-		},
-	}
-	redroidStartCmd.Flags().StringVar(&rdName, "name", "redroid15", "container name")
-	redroidStartCmd.Flags().StringVar(&rdImage, "image", "magsafe/redroid15gappsmagisk:latest", "docker image")
-	redroidStartCmd.Flags().StringVar(&rdDataDir, "data-dir", defaultDataDir, "redroid data directory to mount at /data")
-	redroidStartCmd.Flags().StringVar(&rdDataTar, "data-tar", defaultDataTar, "tar archive to restore before start")
-	redroidStartCmd.Flags().BoolVar(&rdSudo, "sudo", false, "run data restore steps via sudo (or set AVDCTL_SUDO=1)")
-	redroidStartCmd.Flags().IntVar(&rdPort, "port", 5555, "host port mapped to container adb port 5555")
-	redroidStartCmd.Flags().StringVar(&rdShmSize, "shm-size", "3g", "docker --shm-size value")
-	redroidStartCmd.Flags().StringVar(&rdMemory, "memory", "5g", "docker --memory value")
-	redroidStartCmd.Flags().StringVar(&rdCPUs, "cpus", "4", "docker --cpus value")
-	redroidStartCmd.Flags().StringVar(&rdBinderFS, "binderfs", "/dev/binderfs", "binderfs mount source path")
-	redroidStartCmd.Flags().IntVar(&rdWidth, "width", 1080, "androidboot.redroid_width")
-	redroidStartCmd.Flags().IntVar(&rdHeight, "height", 2400, "androidboot.redroid_height")
-	redroidStartCmd.Flags().IntVar(&rdDPI, "dpi", 360, "androidboot.redroid_dpi")
-	redroidCmd.AddCommand(redroidStartCmd)
-
-	var rdWaitSerial string
-	var rdWaitTimeout, rdWaitPoll time.Duration
-	redroidWaitCmd := &cobra.Command{
-		Use:   "wait",
-		Short: "Wait until Redroid boot and framework services are ready",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			mgr := redroidmanager.New()
-			if err := mgr.WaitForBoot(redroidmanager.WaitOptions{
-				Serial:       rdWaitSerial,
+			serial := strings.TrimSpace(rdSerial)
+			if serial == "" {
+				serial = fmt.Sprintf("127.0.0.1:%d", opts.HostPort)
+			}
+			return waitForRedroidWithOutput(env, redroidcore.WaitOptions{
+				Serial:       serial,
 				Timeout:      rdWaitTimeout,
 				PollInterval: rdWaitPoll,
-			}); err != nil {
-				return err
-			}
-			fmt.Printf("Redroid ready on %s\n", rdWaitSerial)
-			return nil
+			})
 		},
 	}
-	redroidWaitCmd.Flags().StringVar(&rdWaitSerial, "serial", "127.0.0.1:5555", "adb serial, e.g. 127.0.0.1:5555")
-	redroidWaitCmd.Flags().DurationVar(&rdWaitTimeout, "timeout", 3*time.Minute, "wait timeout")
-	redroidWaitCmd.Flags().DurationVar(&rdWaitPoll, "poll", 1*time.Second, "poll interval")
-	redroidCmd.AddCommand(redroidWaitCmd)
+	cmd.Flags().StringVar(&rdName, "name", "redroid15", "container name")
+	cmd.Flags().StringVar(&rdImage, "image", "magsafe/redroid15gappsmagisk:latest", "docker image")
+	cmd.Flags().StringVar(&rdDataDir, "data-dir", defaultDataDir, "redroid data directory to mount at /data")
+	cmd.Flags().StringVar(&rdDataTar, "data-tar", defaultDataTar, "tar archive to restore before start")
+	cmd.Flags().BoolVar(&rdSudo, "sudo", false, "run data restore steps via sudo (or set AVDCTL_SUDO=1)")
+	cmd.Flags().IntVar(&rdPort, "port", 5555, "host port mapped to container adb port 5555")
+	cmd.Flags().StringVar(&rdShmSize, "shm-size", "3g", "docker --shm-size value")
+	cmd.Flags().StringVar(&rdMemory, "memory", "5g", "docker --memory value")
+	cmd.Flags().StringVar(&rdCPUs, "cpus", "4", "docker --cpus value")
+	cmd.Flags().StringVar(&rdBinderFS, "binderfs", "/dev/binderfs", "binderfs mount source path")
+	cmd.Flags().IntVar(&rdWidth, "width", 1080, "androidboot.redroid_width")
+	cmd.Flags().IntVar(&rdHeight, "height", 2400, "androidboot.redroid_height")
+	cmd.Flags().IntVar(&rdDPI, "dpi", 360, "androidboot.redroid_dpi")
+	cmd.Flags().BoolVar(&rdWait, "wait", false, "wait for Redroid framework readiness after start")
+	cmd.Flags().StringVar(&rdSerial, "serial", "", "adb serial used with --wait (default: 127.0.0.1:<port>)")
+	cmd.Flags().DurationVar(&rdWaitTimeout, "timeout", 3*time.Minute, "wait timeout when --wait is set")
+	cmd.Flags().DurationVar(&rdWaitPoll, "poll", 1*time.Second, "poll interval when --wait is set")
+	return cmd
+}
 
+func newRedroidStopCommand(use string, env redroidcore.Env) *cobra.Command {
 	var rdStopName string
-	redroidStopCmd := &cobra.Command{
-		Use:   "stop",
+	cmd := &cobra.Command{
+		Use:   use,
 		Short: "Stop a Redroid container by name",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(rdStopName) == "" {
-				return errors.New("--name is required")
-			}
-			mgr := redroidmanager.New()
-			if err := mgr.Stop(rdStopName); err != nil {
-				return err
-			}
-			fmt.Printf("Stopped %s\n", rdStopName)
-			return nil
+			return stopRedroidWithOutput(env, rdStopName)
 		},
 	}
-	redroidStopCmd.Flags().StringVar(&rdStopName, "name", "", "container name")
-	redroidCmd.AddCommand(redroidStopCmd)
+	cmd.Flags().StringVar(&rdStopName, "name", "", "container name")
+	return cmd
+}
 
+func newRedroidDeleteCommand(use string, env redroidcore.Env) *cobra.Command {
 	var rdDeleteName string
-	redroidDeleteCmd := &cobra.Command{
-		Use:   "delete",
+	cmd := &cobra.Command{
+		Use:   use,
 		Short: "Force remove a Redroid container by name",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if strings.TrimSpace(rdDeleteName) == "" {
-				return errors.New("--name is required")
-			}
-			mgr := redroidmanager.New()
-			if err := mgr.Delete(rdDeleteName); err != nil {
-				return err
-			}
-			fmt.Printf("Deleted %s\n", rdDeleteName)
-			return nil
+			return deleteRedroidWithOutput(env, rdDeleteName)
 		},
 	}
-	redroidDeleteCmd.Flags().StringVar(&rdDeleteName, "name", "", "container name")
-	redroidCmd.AddCommand(redroidDeleteCmd)
-
-	return redroidCmd
+	cmd.Flags().StringVar(&rdDeleteName, "name", "", "container name")
+	return cmd
 }
 
 func shouldDelegateOverSSH(cmd *cobra.Command, sshTarget string) bool {

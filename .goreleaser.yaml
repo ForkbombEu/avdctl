@@ -34,12 +34,6 @@ checksum:
 changelog:
   disable: true
 
-sboms:
-  - id: archives
-    artifacts: archive
-  - id: source
-    artifacts: source
-
 source:
   enabled: true
 

@@ -34,7 +34,7 @@ jobs:
           go tool cover -func=coverage.out | awk -v min="90" '/^total:/ { gsub("%","",$3); printf("Total coverage: %s%% (required: %s%%)\n", $3, min); if (($3 + 0) < (min + 0)) exit 1 }'
 
   semantic-release:
-    name: Release
+    name: Semantic release
     needs: go-test
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -58,25 +58,9 @@ jobs:
         with:
           node-version: 20
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          cache: true
-
       - name: Semantic Release
         id: semantic
         uses: cycjimmy/semantic-release-action@v4
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run GoReleaser
-        if: steps.semantic.outputs.new_release_published == 'true'
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: latest
-          args: release --clean --skip=announce
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

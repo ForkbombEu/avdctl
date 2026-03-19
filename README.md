@@ -1,6 +1,9 @@
-# avdctl - Android Virtual Device Lifecycle Manager
+# avdctl - Android Emulator and iOS Simulator Lifecycle Manager
 
-`avdctl` is a CLI tool for managing Android Virtual Device (AVD) golden images and clones. It enables fast creation of disposable emulator instances backed by QCOW2 golden images, perfect for CI/CD pipelines and parallel testing.
+`avdctl` is a CLI tool for managing Android emulators and iOS simulators.
+
+- Android workflows support base AVDs, golden images, QCOW2-backed clones, and parallel headless execution.
+- iOS workflows support base simulators, cloning configured shut-down simulators, and boot/stop/list lifecycle operations through `xcrun simctl`.
 
 ## Install
 
@@ -69,7 +72,9 @@ COPY --from=avdctl-bin /usr/local/bin/avdctl /usr/local/bin/avdctl
 
 3. **Go 1.25+** (for building from source)
 
-4. **Task** (optional, for using Taskfile workflows):
+4. **Xcode command line tools / `xcrun simctl`** (required for iOS commands on macOS)
+
+5. **Task** (optional, for using Taskfile workflows):
    ```bash
    # Install from https://taskfile.dev
    go install github.com/go-task/task/v3/cmd/task@latest
@@ -98,6 +103,47 @@ process over a single SSH session. Path arguments (for example `--golden`, `--de
 are interpreted on the remote host, not on the local machine. Ensure `avdctl` is
 installed on the remote host and available in `PATH`.
 
+## Platform-Aware Commands
+
+The following commands support both platforms:
+
+- `list`
+- `init-base`
+- `run`
+- `clone`
+- `delete`
+- `ps`
+- `status`
+- `stop`
+
+You can call them in either of these forms:
+
+```bash
+# Omitted platform behavior
+# - list / ps return both Android and iOS
+# - status --all returns both Android and iOS
+# - run / status / stop / delete auto-detect by name or ref
+# - Android wins if Android and iOS share the same name
+./bin/avdctl run --name base-a35
+./bin/avdctl list
+./bin/avdctl clone --base base-a35 --name w-demo --golden ~/avd-golden/base-a35
+
+# Explicit platform selection
+./bin/avdctl run android --name base-a35
+./bin/avdctl run ios --name base-ios
+./bin/avdctl clone ios --base base-ios --name ios-demo
+```
+
+Android-only commands remain:
+
+- `save-golden`
+- `prewarm`
+- `customize-start`
+- `customize-finish`
+- `bake-apk`
+- `stop-bluetooth`
+- `cleanup`
+
 ## Quick Start
 
 ### 1. Build
@@ -122,6 +168,29 @@ go build -o bin/avdctl ./cmd/avdctl
   --image "system-images;android-35;google_apis_playstore;x86_64" \
   --device pixel_6
 ```
+
+### iOS Quick Workflow
+
+The iOS flow uses a configured shut-down simulator as the base instead of an exported golden image:
+
+```bash
+# Create a base simulator (latest available iOS runtime + iPhone type by default)
+./bin/avdctl init-base ios --name base-ios
+
+# Boot it and perform any manual setup you want to preserve
+./bin/avdctl run ios --name base-ios
+
+# After manual configuration, shut it down cleanly
+./bin/avdctl stop ios --name base-ios
+
+# Clone the configured base
+./bin/avdctl clone ios --base base-ios --name ios-customer1
+
+# Boot the clone
+./bin/avdctl run ios --name ios-customer1
+```
+
+**Note:** iOS cloning works from a shut-down base simulator. There is no `save-golden` or `prewarm` equivalent for iOS at the moment.
 
 ## Redroid Commands
 
@@ -456,6 +525,8 @@ ls -lh ~/.android/avd/w-customer1.avd/userdata-qemu.img.qcow2
 
 ## Architecture
 
+### Android
+
 - **Base AVD**: Clean Android system created via `avdmanager`
 - **Golden Image**: Compressed QCOW2 snapshot of configured userdata
 - **Clone**: Symlinks to base AVD read-only files + thin QCOW2 overlay backed by golden
@@ -465,6 +536,13 @@ ls -lh ~/.android/avd/w-customer1.avd/userdata-qemu.img.qcow2
 - Base AVD: ~8GB (system image + initial userdata)
 - Golden QCOW2: ~500MB-2GB (compressed, depends on configuration)
 - Clone overlay: ~196KB initially, grows with changes (typically <100MB)
+
+### iOS
+
+- **Base Simulator**: Configured CoreSimulator device kept as the source of truth
+- **Clone**: Created from the shut-down base via `xcrun simctl clone`
+- **Reset Strategy**: Delete and clone again from the base when a simulator becomes dirty
+- **Tradeoff**: Simulators are tied more closely to the host macOS/Xcode/CoreSimulator environment than Android golden images
 
 ---
 
@@ -496,11 +574,17 @@ You can import `avdctl` as a library in your Go projects:
 
 ```go
 import "github.com/forkbombeu/avdctl/pkg/avdmanager"
+import "github.com/forkbombeu/avdctl/pkg/iosmanager"
 
 mgr := avdmanager.New()
 mgr.InitBase(avdmanager.InitBaseOptions{...})
 mgr.Clone(avdmanager.CloneOptions{...})
 mgr.Run(avdmanager.RunOptions{...})
+
+iosMgr := iosmanager.New()
+iosMgr.InitBase(iosmanager.InitBaseOptions{...})
+iosMgr.Clone(iosmanager.CloneOptions{...})
+iosMgr.Run(iosmanager.RunOptions{...})
 ```
 
 See **[pkg/avdmanager/README.md](pkg/avdmanager/README.md)** for complete API documentation and examples.

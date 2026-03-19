@@ -7,7 +7,7 @@ env:
   ANDROID_AVD_HOME:    "{{.HOME}}/.android/avd"
   AVDCTL_GOLDEN_DIR:   "{{.HOME}}/avd-golden"
   AVDCTL_CLONES_DIR:   "{{.HOME}}/avd-clones"
-  AVDCTL_CONFIG_TEMPLATE: "./config.ini.tpl"
+  AVDCTL_CONFIG_TEMPLATE: "{{.TASKFILE_DIR}}/config.ini.tpl"
 
 
 vars:

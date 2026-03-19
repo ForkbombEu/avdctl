@@ -18,23 +18,11 @@ curl -L -o avdctl.tar.gz \
 sudo tar -xzf avdctl.tar.gz -C /usr/local/bin avdctl
 ```
 
-Windows (PowerShell):
-
-```powershell
-# choose your platform archive (example: windows amd64)
-New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\bin" | Out-Null
-Invoke-WebRequest -Uri https://github.com/ForkbombEu/avdctl/releases/latest/download/avdctl_windows_amd64.zip -OutFile avdctl.zip
-Expand-Archive -Path .\avdctl.zip -DestinationPath .\avdctl -Force
-Move-Item .\avdctl\avdctl.exe "$env:USERPROFILE\bin\avdctl.exe" -Force
-```
-
 Make sure the install directory is on your `PATH`:
 
 ```bash
 export PATH="/usr/local/bin:$PATH"
 ```
-
-On Windows, add `%USERPROFILE%\bin` to `PATH` if it is not already there.
 
 ### Install with Go
 

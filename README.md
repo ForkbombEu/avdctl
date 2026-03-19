@@ -7,27 +7,18 @@
 
 ## Install
 
-### Quick Install from Latest Release
+### Install with Go
 
-Linux and macOS:
+Install Go first, then run:
 
 ```bash
-# choose your platform archive (example: linux amd64)
-curl -L -o avdctl.tar.gz \
-  https://github.com/ForkbombEu/avdctl/releases/latest/download/avdctl_linux_amd64.tar.gz
-sudo tar -xzf avdctl.tar.gz -C /usr/local/bin avdctl
+GOBIN="$HOME/.local/bin" go install github.com/forkbombeu/avdctl/cmd/avdctl@latest
 ```
 
 Make sure the install directory is on your `PATH`:
 
 ```bash
-export PATH="/usr/local/bin:$PATH"
-```
-
-### Install with Go
-
-```bash
-GOBIN="$HOME/.local/bin" go install github.com/forkbombeu/avdctl/cmd/avdctl@latest
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Use Container Image in Multi-Stage Builds

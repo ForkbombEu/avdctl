@@ -5,11 +5,16 @@ package avd
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"time"
+
+	otellog "go.opentelemetry.io/otel/log"
+	logglobal "go.opentelemetry.io/otel/log/global"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var avdLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -21,8 +26,56 @@ func logEvent(env Env, message string, fields ...any) {
 	if env.CorrelationID != "" {
 		baseFields = append(baseFields, "correlation_id", env.CorrelationID)
 	}
+	if span := trace.SpanContextFromContext(spanContext(env)); span.IsValid() {
+		baseFields = append(baseFields,
+			"trace_id", span.TraceID().String(),
+			"span_id", span.SpanID().String(),
+		)
+	}
 	allFields := append(baseFields, fields...)
 	avdLogger.Info(message, allFields...)
+	emitOTelLog(env, message, allFields...)
+}
+
+func emitOTelLog(env Env, message string, fields ...any) {
+	ctx := spanContext(env)
+	var record otellog.Record
+	now := time.Now().UTC()
+	record.SetTimestamp(now)
+	record.SetObservedTimestamp(now)
+	record.SetSeverity(otellog.SeverityInfo)
+	record.SetSeverityText("info")
+	record.SetBody(otellog.StringValue(message))
+	record.AddAttributes(logFields(fields)...)
+	logglobal.Logger("avdctl").Emit(ctx, record)
+}
+
+func logFields(fields []any) []otellog.KeyValue {
+	if len(fields) == 0 {
+		return nil
+	}
+	attrs := make([]otellog.KeyValue, 0, len(fields)/2)
+	for i := 0; i+1 < len(fields); i += 2 {
+		key, ok := fields[i].(string)
+		if !ok || strings.TrimSpace(key) == "" {
+			continue
+		}
+		attrs = append(attrs, otellog.String(key, toLogValue(fields[i+1])))
+	}
+	return attrs
+}
+
+func toLogValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []string:
+		return strings.TrimSpace(strings.Join(v, " "))
+	case nil:
+		return ""
+	default:
+		return strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(fmt.Sprint(v), "\n", " "), "\t", " "))
+	}
 }
 
 type lineLogWriter struct {

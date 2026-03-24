@@ -47,9 +47,6 @@ func Detect() Env {
 	sshTarget := os.Getenv("AVDCTL_SSH_TARGET")
 	sshArgs := strings.Fields(os.Getenv("AVDCTL_SSH_ARGS"))
 	correlationID := getenv("AVDCTL_CORRELATION_ID", "")
-	if correlationID == "" {
-		correlationID = os.Getenv("CREDIMI_CORRELATION_ID")
-	}
 
 	return Env{
 		SDKRoot:       sdk,

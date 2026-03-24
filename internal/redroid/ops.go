@@ -19,6 +19,7 @@ import (
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type StartOptions struct {
@@ -112,17 +113,34 @@ func newManagerWithEnv(env Env) *manager {
 }
 
 func (m *manager) Start(opts StartOptions) (string, error) {
+	ctx, span := startSpan(
+		m.env,
+		"redroid.Start",
+		attribute.String("name", opts.Name),
+		attribute.String("image", opts.Image),
+		attribute.Int("host_port", opts.HostPort),
+	)
+	defer span.End()
+	m.env.Context = ctx
 	if strings.TrimSpace(opts.Name) == "" {
-		return "", errors.New("empty container name")
+		err := errors.New("empty container name")
+		recordSpanError(span, err)
+		return "", err
 	}
 	if strings.TrimSpace(opts.Image) == "" {
-		return "", errors.New("empty image")
+		err := errors.New("empty image")
+		recordSpanError(span, err)
+		return "", err
 	}
 	if strings.TrimSpace(opts.DataDir) == "" {
-		return "", errors.New("empty data directory")
+		err := errors.New("empty data directory")
+		recordSpanError(span, err)
+		return "", err
 	}
 	if strings.TrimSpace(opts.DataTar) == "" {
-		return "", errors.New("empty data tar path")
+		err := errors.New("empty data tar path")
+		recordSpanError(span, err)
+		return "", err
 	}
 	if opts.HostPort == 0 {
 		opts.HostPort = 5555
@@ -148,6 +166,8 @@ func (m *manager) Start(opts StartOptions) (string, error) {
 	if opts.DPI == 0 {
 		opts.DPI = 360
 	}
+	span.SetAttributes(attribute.Int("host_port", opts.HostPort))
+	logEvent(m.env, "redroid start requested", "name", opts.Name, "image", opts.Image, "host_port", opts.HostPort)
 
 	useSudo := opts.UseSudo || m.env.Sudo
 	if strings.TrimSpace(m.env.SSHTarget) != "" {
@@ -171,13 +191,18 @@ func (m *manager) Start(opts StartOptions) (string, error) {
 		}
 		out, err := m.runRemote(args...)
 		if err != nil {
+			recordSpanError(span, err)
 			return "", err
 		}
 		openIdx := strings.LastIndex(out, "(")
 		closeIdx := strings.LastIndex(out, ")")
 		if openIdx >= 0 && closeIdx > openIdx {
-			return strings.TrimSpace(out[openIdx+1 : closeIdx]), nil
+			containerID := strings.TrimSpace(out[openIdx+1 : closeIdx])
+			span.SetAttributes(attribute.String("container_id", containerID))
+			logEvent(m.env, "redroid started", "name", opts.Name, "container_id", containerID, "host_port", opts.HostPort)
+			return containerID, nil
 		}
+		logEvent(m.env, "redroid started", "name", opts.Name, "host_port", opts.HostPort)
 		return "", nil
 	}
 
@@ -187,17 +212,20 @@ func (m *manager) Start(opts StartOptions) (string, error) {
 		run = m.runSudo
 	}
 	if err := run("mkdir", "-p", dataParent); err != nil {
+		recordSpanError(span, err)
 		return "", err
 	}
 	if err := run("rm", "-rf", opts.DataDir); err != nil {
+		recordSpanError(span, err)
 		return "", err
 	}
 	if err := run(m.env.TarBin, "--numeric-owner", "--xattrs", "--acls", "-C", dataParent, "-xf", opts.DataTar); err != nil {
+		recordSpanError(span, err)
 		return "", err
 	}
 
 	_ = m.docker.RemoveContainer(m.context(), opts.Name, true)
-	return m.docker.RunContainer(m.context(), dockerRunOptions{
+	containerID, err := m.docker.RunContainer(m.context(), dockerRunOptions{
 		Name:     opts.Name,
 		Image:    opts.Image,
 		DataDir:  opts.DataDir,
@@ -210,9 +238,23 @@ func (m *manager) Start(opts StartOptions) (string, error) {
 		Height:   opts.Height,
 		DPI:      opts.DPI,
 	})
+	recordSpanError(span, err)
+	if err != nil {
+		return "", err
+	}
+	span.SetAttributes(attribute.String("container_id", containerID))
+	logEvent(m.env, "redroid started", "name", opts.Name, "container_id", containerID, "host_port", opts.HostPort)
+	return containerID, nil
 }
 
 func (m *manager) WaitForBoot(opts WaitOptions) error {
+	ctx, span := startSpan(
+		m.env,
+		"redroid.WaitForBoot",
+		attribute.String("serial", opts.Serial),
+	)
+	defer span.End()
+	m.env.Context = ctx
 	if strings.TrimSpace(opts.Serial) == "" {
 		opts.Serial = "127.0.0.1:5555"
 	}
@@ -222,6 +264,12 @@ func (m *manager) WaitForBoot(opts WaitOptions) error {
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = time.Second
 	}
+	span.SetAttributes(
+		attribute.String("serial", opts.Serial),
+		attribute.String("timeout", opts.Timeout.String()),
+		attribute.String("poll_interval", opts.PollInterval.String()),
+	)
+	logEvent(m.env, "redroid boot wait started", "serial", opts.Serial, "timeout", opts.Timeout.String(), "poll_interval", opts.PollInterval.String())
 	if strings.TrimSpace(m.env.SSHTarget) != "" {
 		_, err := m.runRemote(
 			"run", "redroid",
@@ -230,12 +278,17 @@ func (m *manager) WaitForBoot(opts WaitOptions) error {
 			"--timeout", opts.Timeout.String(),
 			"--poll", opts.PollInterval.String(),
 		)
+		recordSpanError(span, err)
+		if err == nil {
+			logEvent(m.env, "redroid boot completed", "serial", opts.Serial)
+		}
 		return err
 	}
 
 	_ = m.run(m.env.ADBBin, "start-server")
 	_, _ = m.runOutput(m.env.ADBBin, "connect", opts.Serial)
 	if err := m.run(m.env.ADBBin, "-s", opts.Serial, "wait-for-device"); err != nil {
+		recordSpanError(span, err)
 		return err
 	}
 
@@ -250,35 +303,78 @@ func (m *manager) WaitForBoot(opts WaitOptions) error {
 			strings.Contains(strings.ToLower(pkg), "found") &&
 			strings.Contains(strings.ToLower(act), "found") &&
 			strings.TrimSpace(ss) != "" {
+			span.SetAttributes(attribute.Bool("boot_completed", true))
+			logEvent(m.env, "redroid boot completed", "serial", opts.Serial)
 			return nil
 		}
 		time.Sleep(opts.PollInterval)
 	}
 
 	diag, _ := m.adbShell(opts.Serial, "getprop")
-	return fmt.Errorf("timed out waiting for redroid boot on %s\nDiagnostics:\n%s", opts.Serial, diag)
+	err := fmt.Errorf("timed out waiting for redroid boot on %s\nDiagnostics:\n%s", opts.Serial, diag)
+	recordSpanError(span, err)
+	logEvent(m.env, "redroid boot timeout", "serial", opts.Serial)
+	return err
 }
 
 func (m *manager) Stop(name string) error {
+	ctx, span := startSpan(
+		m.env,
+		"redroid.Stop",
+		attribute.String("name", name),
+	)
+	defer span.End()
+	m.env.Context = ctx
 	if strings.TrimSpace(name) == "" {
-		return errors.New("empty container name")
-	}
-	if strings.TrimSpace(m.env.SSHTarget) != "" {
-		_, err := m.runRemote("stop", "redroid", "--name", name)
+		err := errors.New("empty container name")
+		recordSpanError(span, err)
 		return err
 	}
-	return m.docker.StopContainer(m.context(), name)
+	logEvent(m.env, "redroid stop requested", "name", name)
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		_, err := m.runRemote("stop", "redroid", "--name", name)
+		recordSpanError(span, err)
+		if err == nil {
+			logEvent(m.env, "redroid stopped", "name", name)
+		}
+		return err
+	}
+	err := m.docker.StopContainer(m.context(), name)
+	recordSpanError(span, err)
+	if err == nil {
+		logEvent(m.env, "redroid stopped", "name", name)
+	}
+	return err
 }
 
 func (m *manager) Delete(name string) error {
+	ctx, span := startSpan(
+		m.env,
+		"redroid.Delete",
+		attribute.String("name", name),
+	)
+	defer span.End()
+	m.env.Context = ctx
 	if strings.TrimSpace(name) == "" {
-		return errors.New("empty container name")
-	}
-	if strings.TrimSpace(m.env.SSHTarget) != "" {
-		_, err := m.runRemote("delete", "redroid", "--name", name)
+		err := errors.New("empty container name")
+		recordSpanError(span, err)
 		return err
 	}
-	return m.docker.RemoveContainer(m.context(), name, true)
+	logEvent(m.env, "redroid delete requested", "name", name)
+	if strings.TrimSpace(m.env.SSHTarget) != "" {
+		_, err := m.runRemote("delete", "redroid", "--name", name)
+		recordSpanError(span, err)
+		if err == nil {
+			logEvent(m.env, "redroid deleted", "name", name)
+		}
+		return err
+	}
+	err := m.docker.RemoveContainer(m.context(), name, true)
+	recordSpanError(span, err)
+	if err == nil {
+		logEvent(m.env, "redroid deleted", "name", name)
+	}
+	return err
 }
 
 func (m *manager) context() context.Context {
@@ -330,8 +426,21 @@ func (m *manager) runOutputWithInput(stdin io.Reader, bin string, args ...string
 	var errOut bytes.Buffer
 	cmd.Stdin = stdin
 	cmd.Stdout = &out
-	cmd.Stderr = &errOut
+	cmd.Stderr = io.MultiWriter(&errOut, newCommandLogWriter(m.env, bin, args))
+	logEvent(m.env, "command started", "command", bin, "args", strings.Join(args, " "))
 	if err := cmd.Run(); err != nil {
+		logEvent(
+			m.env,
+			"command failed",
+			"command",
+			bin,
+			"args",
+			strings.Join(args, " "),
+			"error",
+			err,
+			"stderr",
+			strings.TrimSpace(errOut.String()),
+		)
 		return "", fmt.Errorf("%s %v failed: %w\n%s", bin, args, err, strings.TrimSpace(errOut.String()))
 	}
 	return out.String(), nil

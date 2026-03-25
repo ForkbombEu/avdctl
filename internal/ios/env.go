@@ -23,8 +23,9 @@ var platformSupported = func() bool {
 
 func Detect() Env {
 	return Env{
-		Xcrun:   getenv("IOS_XCRUN_BIN", "xcrun"),
-		Context: context.Background(),
+		Xcrun:         getenv("IOS_XCRUN_BIN", "xcrun"),
+		CorrelationID: getenv("AVDCTL_CORRELATION_ID", ""),
+		Context:       context.Background(),
 	}
 }
 

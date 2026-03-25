@@ -1,7 +1,7 @@
 // Copyright (C) 2025 Forkbomb B.V.
 // License: AGPL-3.0-only
 
-package avd
+package ios
 
 import (
 	"bytes"
@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-var avdLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+var iosLogger = slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 	Level: slog.LevelInfo,
 }))
 
@@ -33,7 +33,7 @@ func logEvent(env Env, message string, fields ...any) {
 		)
 	}
 	allFields := append(baseFields, fields...)
-	avdLogger.Info(message, allFields...)
+	iosLogger.Info(message, allFields...)
 	emitOTelLog(env, message, allFields...)
 }
 

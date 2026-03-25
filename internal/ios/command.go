@@ -8,6 +8,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"strings"
 )
 
 func commandContext(ctx context.Context, bin string, args ...string) *exec.Cmd {
@@ -18,17 +19,33 @@ func commandContext(ctx context.Context, bin string, args ...string) *exec.Cmd {
 }
 
 func runCommandOutput(
-	ctx context.Context,
+	env Env,
 	stdin io.Reader,
 	bin string,
 	args ...string,
 ) (string, string, error) {
+	ctx := spanContext(env)
 	cmd := commandContext(ctx, bin, args...)
 	cmd.Stdin = stdin
 	var out bytes.Buffer
 	var errOut bytes.Buffer
 	cmd.Stdout = &out
-	cmd.Stderr = &errOut
+	cmd.Stderr = io.MultiWriter(&errOut, newCommandLogWriter(env, bin, args))
+	logEvent(env, "command started", "command", bin, "args", strings.Join(args, " "))
 	err := cmd.Run()
+	if err != nil {
+		logEvent(
+			env,
+			"command failed",
+			"command",
+			bin,
+			"args",
+			strings.Join(args, " "),
+			"error",
+			err,
+			"stderr",
+			strings.TrimSpace(errOut.String()),
+		)
+	}
 	return out.String(), errOut.String(), err
 }

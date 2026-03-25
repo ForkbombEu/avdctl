@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"go.opentelemetry.io/otel/attribute"
 )
 
 type Info struct {
@@ -58,11 +60,16 @@ type simDevice struct {
 }
 
 func List(env Env) ([]Info, error) {
+	_, span := startSpan(env, "ios.List")
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return nil, err
 	}
+	logEvent(env, "ios simulator list requested")
 	payload, err := loadList(env)
 	if err != nil {
+		recordSpanError(span, err)
 		return nil, err
 	}
 	infos := make([]Info, 0)
@@ -88,15 +95,21 @@ func List(env Env) ([]Info, error) {
 		}
 		return infos[i].UDID < infos[j].UDID
 	})
+	span.SetAttributes(attribute.Int("device_count", len(infos)))
 	return infos, nil
 }
 
 func ListRunning(env Env) ([]ProcInfo, error) {
+	_, span := startSpan(env, "ios.ListRunning")
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return nil, err
 	}
+	logEvent(env, "ios running simulator list requested")
 	payload, err := loadList(env)
 	if err != nil {
+		recordSpanError(span, err)
 		return nil, err
 	}
 	procs := make([]ProcInfo, 0)
@@ -121,84 +134,139 @@ func ListRunning(env Env) ([]ProcInfo, error) {
 		}
 		return procs[i].UDID < procs[j].UDID
 	})
+	span.SetAttributes(attribute.Int("running_count", len(procs)))
 	return procs, nil
 }
 
 func InitBase(env Env, name, runtimeID, deviceTypeID string) (Info, error) {
+	_, span := startSpan(
+		env,
+		"ios.InitBase",
+		attribute.String("name", name),
+	)
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return Info{}, err
 	}
 	if strings.TrimSpace(name) == "" {
-		return Info{}, errors.New("empty simulator name")
+		err := errors.New("empty simulator name")
+		recordSpanError(span, err)
+		return Info{}, err
 	}
+	logEvent(env, "ios simulator create requested", "name", name)
 	payload, err := loadList(env)
 	if err != nil {
+		recordSpanError(span, err)
 		return Info{}, err
 	}
 	if strings.TrimSpace(runtimeID) == "" {
 		runtimeID, err = defaultRuntime(payload.Runtimes)
 		if err != nil {
+			recordSpanError(span, err)
 			return Info{}, err
 		}
 	}
 	if strings.TrimSpace(deviceTypeID) == "" {
 		deviceTypeID, err = defaultDeviceType(payload.DeviceTypes)
 		if err != nil {
+			recordSpanError(span, err)
 			return Info{}, err
 		}
 	}
-	out, errOut, err := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "create", name, deviceTypeID, runtimeID)
+	out, errOut, err := runCommandOutput(env, nil, env.Xcrun, "simctl", "create", name, deviceTypeID, runtimeID)
 	if err != nil {
+		recordSpanError(span, err)
 		return Info{}, fmt.Errorf("xcrun simctl create failed: %v\n%s%s", err, out, errOut)
 	}
 	udid := strings.TrimSpace(out)
+	span.SetAttributes(
+		attribute.String("runtime_id", runtimeID),
+		attribute.String("device_type_id", deviceTypeID),
+		attribute.String("udid", udid),
+	)
+	logEvent(env, "ios simulator created", "name", name, "udid", udid, "runtime_id", runtimeID, "device_type_id", deviceTypeID)
 	return Find(env, udid)
 }
 
 func Clone(env Env, sourceRef, newName string) (Info, error) {
+	_, span := startSpan(
+		env,
+		"ios.Clone",
+		attribute.String("source_ref", sourceRef),
+		attribute.String("name", newName),
+	)
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return Info{}, err
 	}
 	if strings.TrimSpace(sourceRef) == "" {
-		return Info{}, errors.New("empty source simulator reference")
+		err := errors.New("empty source simulator reference")
+		recordSpanError(span, err)
+		return Info{}, err
 	}
 	if strings.TrimSpace(newName) == "" {
-		return Info{}, errors.New("empty clone simulator name")
+		err := errors.New("empty clone simulator name")
+		recordSpanError(span, err)
+		return Info{}, err
 	}
+	logEvent(env, "ios simulator clone requested", "source_ref", sourceRef, "name", newName)
 	device, _, err := resolveDevice(env, sourceRef)
 	if err != nil {
+		recordSpanError(span, err)
 		return Info{}, err
 	}
 	if strings.EqualFold(device.State, "Booted") {
-		return Info{}, fmt.Errorf("source simulator %q must be shutdown before cloning", sourceRef)
+		err := fmt.Errorf("source simulator %q must be shutdown before cloning", sourceRef)
+		recordSpanError(span, err)
+		return Info{}, err
 	}
-	out, errOut, runErr := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "clone", device.UDID, newName)
+	out, errOut, runErr := runCommandOutput(env, nil, env.Xcrun, "simctl", "clone", device.UDID, newName)
 	if runErr != nil {
+		recordSpanError(span, runErr)
 		return Info{}, fmt.Errorf("xcrun simctl clone failed: %v\n%s%s", runErr, out, errOut)
 	}
 	udid := strings.TrimSpace(out)
+	span.SetAttributes(attribute.String("source_udid", device.UDID))
 	if udid != "" {
+		span.SetAttributes(attribute.String("udid", udid))
+		logEvent(env, "ios simulator cloned", "source_ref", sourceRef, "source_udid", device.UDID, "name", newName, "udid", udid)
 		return Find(env, udid)
 	}
+	logEvent(env, "ios simulator cloned", "source_ref", sourceRef, "source_udid", device.UDID, "name", newName)
 	return Find(env, newName)
 }
 
 func Run(env Env, ref string) (ProcInfo, error) {
+	_, span := startSpan(
+		env,
+		"ios.Run",
+		attribute.String("ref", ref),
+	)
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return ProcInfo{}, err
 	}
+	logEvent(env, "ios simulator boot requested", "ref", ref)
 	device, runtimeName, err := resolveDevice(env, ref)
 	if err != nil {
+		recordSpanError(span, err)
 		return ProcInfo{}, err
 	}
 	if !strings.EqualFold(device.State, "Booted") {
-		if out, errOut, runErr := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "boot", device.UDID); runErr != nil {
+		if out, errOut, runErr := runCommandOutput(env, nil, env.Xcrun, "simctl", "boot", device.UDID); runErr != nil {
+			recordSpanError(span, runErr)
 			return ProcInfo{}, fmt.Errorf("xcrun simctl boot failed: %v\n%s%s", runErr, out, errOut)
 		}
 	}
-	if out, errOut, runErr := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "bootstatus", device.UDID, "-b"); runErr != nil {
+	if out, errOut, runErr := runCommandOutput(env, nil, env.Xcrun, "simctl", "bootstatus", device.UDID, "-b"); runErr != nil {
+		recordSpanError(span, runErr)
 		return ProcInfo{}, fmt.Errorf("xcrun simctl bootstatus failed: %v\n%s%s", runErr, out, errOut)
 	}
+	span.SetAttributes(attribute.String("udid", device.UDID))
+	logEvent(env, "ios simulator boot completed", "ref", ref, "name", device.Name, "udid", device.UDID)
 	return ProcInfo{
 		Name:    device.Name,
 		UDID:    device.UDID,
@@ -209,43 +277,76 @@ func Run(env Env, ref string) (ProcInfo, error) {
 }
 
 func Stop(env Env, ref string) error {
+	_, span := startSpan(
+		env,
+		"ios.Stop",
+		attribute.String("ref", ref),
+	)
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return err
 	}
+	logEvent(env, "ios simulator shutdown requested", "ref", ref)
 	device, _, err := resolveDevice(env, ref)
 	if err != nil {
+		recordSpanError(span, err)
 		return err
 	}
-	out, errOut, runErr := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "shutdown", device.UDID)
+	out, errOut, runErr := runCommandOutput(env, nil, env.Xcrun, "simctl", "shutdown", device.UDID)
 	if runErr != nil {
+		recordSpanError(span, runErr)
 		return fmt.Errorf("xcrun simctl shutdown failed: %v\n%s%s", runErr, out, errOut)
 	}
+	span.SetAttributes(attribute.String("udid", device.UDID))
+	logEvent(env, "ios simulator shutdown completed", "ref", ref, "name", device.Name, "udid", device.UDID)
 	return nil
 }
 
 func Delete(env Env, ref string) error {
+	_, span := startSpan(
+		env,
+		"ios.Delete",
+		attribute.String("ref", ref),
+	)
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return err
 	}
+	logEvent(env, "ios simulator delete requested", "ref", ref)
 	device, _, err := resolveDevice(env, ref)
 	if err != nil {
+		recordSpanError(span, err)
 		return err
 	}
-	out, errOut, runErr := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "delete", device.UDID)
+	out, errOut, runErr := runCommandOutput(env, nil, env.Xcrun, "simctl", "delete", device.UDID)
 	if runErr != nil {
+		recordSpanError(span, runErr)
 		return fmt.Errorf("xcrun simctl delete failed: %v\n%s%s", runErr, out, errOut)
 	}
+	span.SetAttributes(attribute.String("udid", device.UDID))
+	logEvent(env, "ios simulator deleted", "ref", ref, "name", device.Name, "udid", device.UDID)
 	return nil
 }
 
 func Find(env Env, ref string) (Info, error) {
+	_, span := startSpan(
+		env,
+		"ios.Find",
+		attribute.String("ref", ref),
+	)
+	defer span.End()
 	if err := EnsureSupported(); err != nil {
+		recordSpanError(span, err)
 		return Info{}, err
 	}
 	device, runtimeName, err := resolveDevice(env, ref)
 	if err != nil {
+		recordSpanError(span, err)
 		return Info{}, err
 	}
+	span.SetAttributes(attribute.String("udid", device.UDID))
 	return Info{
 		Name:      device.Name,
 		UDID:      device.UDID,
@@ -257,7 +358,7 @@ func Find(env Env, ref string) (Info, error) {
 }
 
 func loadList(env Env) (simctlList, error) {
-	out, errOut, err := runCommandOutput(env.Context, nil, env.Xcrun, "simctl", "list", "--json")
+	out, errOut, err := runCommandOutput(env, nil, env.Xcrun, "simctl", "list", "--json")
 	if err != nil {
 		return simctlList{}, fmt.Errorf("xcrun simctl list failed: %v\n%s%s", err, out, errOut)
 	}

@@ -9,12 +9,13 @@ import (
 )
 
 type Env struct {
-	DockerHost string
-	ADBBin     string
-	TarBin     string
-	SudoBin    string
-	Sudo       bool
-	SudoPass   string
+	DockerHost    string
+	ADBBin        string
+	TarBin        string
+	SudoBin       string
+	Sudo          bool
+	SudoPass      string
+	CorrelationID string
 
 	SSHTarget string
 	SSHArgs   []string
@@ -24,15 +25,16 @@ type Env struct {
 
 func Detect() Env {
 	return Env{
-		DockerHost: strings.TrimSpace(os.Getenv("DOCKER_HOST")),
-		ADBBin:     "adb",
-		TarBin:     "tar",
-		SudoBin:    strings.TrimSpace(os.Getenv("AVDCTL_SUDO_BIN")),
-		Sudo:       getenvBool("AVDCTL_SUDO"),
-		SudoPass:   os.Getenv("AVDCTL_SUDO_PASSWORD"),
-		SSHTarget:  os.Getenv("AVDCTL_SSH_TARGET"),
-		SSHArgs:    strings.Fields(os.Getenv("AVDCTL_SSH_ARGS")),
-		Context:    context.Background(),
+		DockerHost:    strings.TrimSpace(os.Getenv("DOCKER_HOST")),
+		ADBBin:        "adb",
+		TarBin:        "tar",
+		SudoBin:       strings.TrimSpace(os.Getenv("AVDCTL_SUDO_BIN")),
+		Sudo:          getenvBool("AVDCTL_SUDO"),
+		SudoPass:      os.Getenv("AVDCTL_SUDO_PASSWORD"),
+		CorrelationID: strings.TrimSpace(os.Getenv("AVDCTL_CORRELATION_ID")),
+		SSHTarget:     os.Getenv("AVDCTL_SSH_TARGET"),
+		SSHArgs:       strings.Fields(os.Getenv("AVDCTL_SSH_ARGS")),
+		Context:       context.Background(),
 	}
 }
 

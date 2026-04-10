@@ -9,6 +9,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type Env struct {
@@ -24,6 +25,9 @@ type Env struct {
 	QemuImg    string // qemu-img
 	SSHTarget  string // AVDCTL_SSH_TARGET (optional, e.g. user@host)
 	SSHArgs    []string
+	// EmulatorSerialTimeout is the default time to wait for adb to report the
+	// emulator serial after launch.
+	EmulatorSerialTimeout time.Duration
 	// CorrelationID is used to tie logs to a specific workflow/activity.
 	CorrelationID string
 	// Context is used to parent OpenTelemetry spans.
@@ -49,20 +53,21 @@ func Detect() Env {
 	correlationID := getenv("AVDCTL_CORRELATION_ID", "")
 
 	return Env{
-		SDKRoot:       sdk,
-		AVDHome:       avd,
-		GoldenDir:     gold,
-		ClonesDir:     clns,
-		ConfigTpl:     tpl,
-		Emulator:      "emulator",
-		ADB:           "adb",
-		AvdMgr:        "avdmanager",
-		SdkManager:    "sdkmanager",
-		QemuImg:       "qemu-img",
-		SSHTarget:     sshTarget,
-		SSHArgs:       sshArgs,
-		CorrelationID: correlationID,
-		Context:       context.Background(),
+		SDKRoot:               sdk,
+		AVDHome:               avd,
+		GoldenDir:             gold,
+		ClonesDir:             clns,
+		ConfigTpl:             tpl,
+		Emulator:              "emulator",
+		ADB:                   "adb",
+		AvdMgr:                "avdmanager",
+		SdkManager:            "sdkmanager",
+		QemuImg:               "qemu-img",
+		SSHTarget:             sshTarget,
+		SSHArgs:               sshArgs,
+		EmulatorSerialTimeout: 4 * time.Minute,
+		CorrelationID:         correlationID,
+		Context:               context.Background(),
 	}
 }
 
@@ -72,6 +77,13 @@ func getenv(k, def string) string {
 		return def
 	}
 	return v
+}
+
+func (e Env) emulatorSerialTimeout() time.Duration {
+	if e.EmulatorSerialTimeout > 0 {
+		return e.EmulatorSerialTimeout
+	}
+	return 4 * time.Minute
 }
 
 func DefaultGoldenDir() string { return Detect().GoldenDir }

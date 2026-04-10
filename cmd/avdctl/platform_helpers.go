@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
+	"time"
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
 	ioscore "github.com/forkbombeu/avdctl/internal/ios"
@@ -15,9 +15,13 @@ var (
 	androidDeleteFn      = core.Delete
 	androidListFn        = core.List
 	androidListRunningFn = core.ListRunning
-	androidRunAVDFn      = func(env core.Env, name string) (string, error) { return core.RunAVD(env, name) }
-	androidStartOnPortFn = func(env core.Env, name string, port int) (*exec.Cmd, string, string, error) {
-		return core.StartEmulatorOnPort(env, name, port)
+	androidRunAVDFn      = func(env core.Env, name string, serialTimeout time.Duration) (string, error) {
+		env.EmulatorSerialTimeout = serialTimeout
+		return core.RunAVD(env, name)
+	}
+	androidStartOnPortFn = func(env core.Env, name string, port int, serialTimeout time.Duration) (string, string, error) {
+		env.EmulatorSerialTimeout = serialTimeout
+		return core.RunAVDOnPort(env, name, port)
 	}
 	androidStopBySerialFn = core.StopBySerial
 
@@ -173,7 +177,7 @@ func printIOSStatus(env ioscore.Env, ref string) error {
 	return nil
 }
 
-func runAndroidWithOutput(env core.Env, name string, port int) error {
+func runAndroidWithOutput(env core.Env, name string, port int, serialTimeout time.Duration) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("--name is required")
 	}
@@ -181,14 +185,14 @@ func runAndroidWithOutput(env core.Env, name string, port int) error {
 		if port%2 != 0 {
 			return fmt.Errorf("--port must be even")
 		}
-		_, _, logPath, err := androidStartOnPortFn(env, name, port)
+		serial, logPath, err := androidStartOnPortFn(env, name, port, serialTimeout)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("Started %s on emulator-%d (log: %s)\n", name, port, logPath)
+		fmt.Printf("Started %s on %s (log: %s)\n", name, serial, logPath)
 		return nil
 	}
-	_, err := androidRunAVDFn(env, name)
+	_, err := androidRunAVDFn(env, name, serialTimeout)
 	return err
 }
 

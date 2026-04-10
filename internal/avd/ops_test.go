@@ -1,6 +1,8 @@
 package avd
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestDetect(t *testing.T) {
 	env := Detect()

@@ -151,7 +151,6 @@ func newPlatformInitBaseCommand(androidEnv core.Env, iosEnv ioscore.Env) *cobra.
 func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env, redroidEnv redroidcore.Env) *cobra.Command {
 	var name string
 	var port int
-	serialTimeout := androidEnv.EmulatorSerialTimeout
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Start a device; auto-detect android/ios by name, or use `run android|ios|redroid`",
@@ -169,17 +168,13 @@ func newPlatformRunCommand(androidEnv core.Env, iosEnv ioscore.Env, redroidEnv r
 				if port != 0 {
 					return errors.New("--port is only supported for Android emulators")
 				}
-				if cmd.Flags().Changed("serial-timeout") {
-					return errors.New("--serial-timeout is only supported for Android emulators")
-				}
 				return runIOSWithOutput(iosEnv, name)
 			}
-			return runAndroidWithOutput(androidEnv, name, port, serialTimeout)
+			return runAndroidWithOutput(androidEnv, name, port)
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "Device name or iOS simulator UDID")
 	cmd.Flags().IntVar(&port, "port", 0, "even TCP port to bind Android emulator (auto if omitted)")
-	cmd.Flags().DurationVar(&serialTimeout, "serial-timeout", androidEnv.EmulatorSerialTimeout, "how long to wait for adb to report the emulator serial")
 	cmd.AddCommand(newAndroidRunCommand("android", androidEnv))
 	cmd.AddCommand(newIOSRunCommand("ios", iosEnv))
 	cmd.AddCommand(newRedroidRunCommand("redroid", redroidEnv))
@@ -435,17 +430,15 @@ func newIOSInitBaseCommand(use string, env ioscore.Env) *cobra.Command {
 func newAndroidRunCommand(use string, env core.Env) *cobra.Command {
 	var runName string
 	var runPort int
-	serialTimeout := env.EmulatorSerialTimeout
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: "Run an Android AVD headless (no snapshots); supports parallel instances",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runAndroidWithOutput(env, runName, runPort, serialTimeout)
+			return runAndroidWithOutput(env, runName, runPort)
 		},
 	}
 	cmd.Flags().StringVar(&runName, "name", "", "AVD name to run")
 	cmd.Flags().IntVar(&runPort, "port", 0, "even TCP port to bind emulator (auto if omitted)")
-	cmd.Flags().DurationVar(&serialTimeout, "serial-timeout", env.EmulatorSerialTimeout, "how long to wait for adb to report the emulator serial")
 	return cmd
 }
 

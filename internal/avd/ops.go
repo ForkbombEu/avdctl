@@ -33,7 +33,6 @@ type Info struct {
 }
 
 const cloneFingerprintFilename = ".golden.fingerprint"
-const defaultEmulatorSerialTimeout = 4 * time.Minute
 
 // BootProgressFunc is called to report boot progress status.
 type BootProgressFunc func(status string, elapsed time.Duration)
@@ -767,25 +766,14 @@ func RunAVD(env Env, name string, extraArgs ...string) (string, error) {
 		return "", err
 	}
 
-	// Wait for adb to see this exact serial before returning control.
-	if err := waitForEmulatorSerial(env, serial, env.emulatorSerialTimeout()); err != nil {
+	// wait up to 60s for adb to see this exact serial
+	if err := waitForEmulatorSerial(env, serial, 60*time.Second); err != nil {
 		recordSpanError(span, err)
 		return "", fmt.Errorf("%w\nemulator log: %s", err, logPath)
 	}
 	span.SetAttributes(attribute.String("serial", serial))
 	fmt.Printf("Started %s on %s (log: %s)\n", name, serial, logPath)
 	return serial, nil
-}
-
-func RunAVDOnPort(env Env, name string, port int, extraArgs ...string) (string, string, error) {
-	_, serial, logPath, err := StartEmulatorOnPort(env, name, port, extraArgs...)
-	if err != nil {
-		return "", "", err
-	}
-	if err := waitForEmulatorSerial(env, serial, env.emulatorSerialTimeout()); err != nil {
-		return "", "", fmt.Errorf("%w\nemulator log: %s", err, logPath)
-	}
-	return serial, logPath, nil
 }
 
 func BakeAPK(env Env, base, name, golden string, apks []string, timeout time.Duration) (string, int64, error) {

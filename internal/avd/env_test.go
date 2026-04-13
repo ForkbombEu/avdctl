@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestDefaultGoldenDirUsesEnvOverride(t *testing.T) {
@@ -47,29 +46,5 @@ func TestDetectSSHSettings(t *testing.T) {
 	}
 	if env.SSHArgs[0] != "-p" || env.SSHArgs[1] != "2222" {
 		t.Fatalf("unexpected SSHArgs prefix: %#v", env.SSHArgs)
-	}
-}
-
-func TestDetectSetsDefaultEmulatorSerialTimeout(t *testing.T) {
-	env := Detect()
-
-	if env.EmulatorSerialTimeout != 4*time.Minute {
-		t.Fatalf("EmulatorSerialTimeout = %s, want %s", env.EmulatorSerialTimeout, 4*time.Minute)
-	}
-}
-
-func TestEnvEmulatorSerialTimeoutUsesDefaultWhenUnset(t *testing.T) {
-	var env Env
-
-	if got := env.emulatorSerialTimeout(); got != 4*time.Minute {
-		t.Fatalf("emulatorSerialTimeout() = %s, want %s", got, 4*time.Minute)
-	}
-}
-
-func TestEnvEmulatorSerialTimeoutUsesConfiguredValue(t *testing.T) {
-	env := Env{EmulatorSerialTimeout: 90 * time.Second}
-
-	if got := env.emulatorSerialTimeout(); got != 90*time.Second {
-		t.Fatalf("emulatorSerialTimeout() = %s, want %s", got, 90*time.Second)
 	}
 }

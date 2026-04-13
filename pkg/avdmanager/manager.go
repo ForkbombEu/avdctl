@@ -30,8 +30,6 @@ type Manager struct {
 var managerTracer = otel.Tracer("avdctl/manager")
 var remoteRunOutput = remoteavdctl.RunOutput
 
-const defaultEmulatorSerialTimeout = 4 * time.Minute
-
 // New creates a new AVD Manager with auto-detected environment.
 func New() *Manager {
 	return &Manager{
@@ -70,21 +68,20 @@ func NewWithEnv(env Environment) *Manager {
 	}
 	return &Manager{
 		env: avd.Env{
-			SDKRoot:               env.SDKRoot,
-			AVDHome:               env.AVDHome,
-			GoldenDir:             env.GoldenDir,
-			ClonesDir:             env.ClonesDir,
-			ConfigTpl:             env.ConfigTemplate,
-			Emulator:              env.EmulatorBin,
-			ADB:                   env.ADBBin,
-			AvdMgr:                env.AvdManagerBin,
-			SdkManager:            env.SdkManagerBin,
-			QemuImg:               env.QemuImgBin,
-			SSHTarget:             env.SSHTarget,
-			SSHArgs:               env.SSHArgs,
-			EmulatorSerialTimeout: env.EmulatorSerialTimeout,
-			CorrelationID:         env.CorrelationID,
-			Context:               ctx,
+			SDKRoot:       env.SDKRoot,
+			AVDHome:       env.AVDHome,
+			GoldenDir:     env.GoldenDir,
+			ClonesDir:     env.ClonesDir,
+			ConfigTpl:     env.ConfigTemplate,
+			Emulator:      env.EmulatorBin,
+			ADB:           env.ADBBin,
+			AvdMgr:        env.AvdManagerBin,
+			SdkManager:    env.SdkManagerBin,
+			QemuImg:       env.QemuImgBin,
+			SSHTarget:     env.SSHTarget,
+			SSHArgs:       env.SSHArgs,
+			CorrelationID: env.CorrelationID,
+			Context:       ctx,
 		},
 	}
 }
@@ -150,21 +147,20 @@ func recordSpanError(span trace.Span, err error) {
 
 // Environment holds configuration for AVD tools and paths.
 type Environment struct {
-	SDKRoot               string          // ANDROID_SDK_ROOT
-	AVDHome               string          // ANDROID_AVD_HOME (default ~/.android/avd)
-	GoldenDir             string          // Directory for golden QCOW2 images
-	ClonesDir             string          // Directory for clones (optional)
-	ConfigTemplate        string          // Path to config.ini template (optional)
-	EmulatorBin           string          // Path to emulator binary (default: "emulator")
-	ADBBin                string          // Path to adb binary (default: "adb")
-	AvdManagerBin         string          // Path to avdmanager binary (default: "avdmanager")
-	SdkManagerBin         string          // Path to sdkmanager binary (default: "sdkmanager")
-	QemuImgBin            string          // Path to qemu-img binary (default: "qemu-img")
-	SSHTarget             string          // Optional SSH target (user@host) for remote command execution
-	SSHArgs               []string        // Optional extra ssh args (e.g. []string{"-i", "~/.ssh/key"})
-	EmulatorSerialTimeout time.Duration   // Default time to wait for adb to report the emulator serial (default: 4m)
-	CorrelationID         string          // Correlation ID for log enrichment
-	Context               context.Context // Context for tracing
+	SDKRoot        string          // ANDROID_SDK_ROOT
+	AVDHome        string          // ANDROID_AVD_HOME (default ~/.android/avd)
+	GoldenDir      string          // Directory for golden QCOW2 images
+	ClonesDir      string          // Directory for clones (optional)
+	ConfigTemplate string          // Path to config.ini template (optional)
+	EmulatorBin    string          // Path to emulator binary (default: "emulator")
+	ADBBin         string          // Path to adb binary (default: "adb")
+	AvdManagerBin  string          // Path to avdmanager binary (default: "avdmanager")
+	SdkManagerBin  string          // Path to sdkmanager binary (default: "sdkmanager")
+	QemuImgBin     string          // Path to qemu-img binary (default: "qemu-img")
+	SSHTarget      string          // Optional SSH target (user@host) for remote command execution
+	SSHArgs        []string        // Optional extra ssh args (e.g. []string{"-i", "~/.ssh/key"})
+	CorrelationID  string          // Correlation ID for log enrichment
+	Context        context.Context // Context for tracing
 }
 
 // BootProgressFunc reports boot progress updates.
@@ -203,9 +199,8 @@ type CloneOptions struct {
 
 // RunOptions contains options for running an emulator.
 type RunOptions struct {
-	Name          string        // AVD name (required)
-	Port          int           // Console port (0 = auto-assign)
-	SerialTimeout time.Duration // Time to wait for adb to report the emulator serial (default: 4m)
+	Name string // AVD name (required)
+	Port int    // Console port (0 = auto-assign)
 }
 
 // SaveGoldenOptions contains options for saving a golden image.
@@ -312,18 +307,7 @@ func (m *Manager) Run(opts RunOptions) (string, error) {
 			recordSpanError(span, err)
 			return "", err
 		}
-		args := []string{"run", "--name", opts.Name}
-		timeout := m.env.EmulatorSerialTimeout
-		if opts.SerialTimeout > 0 {
-			timeout = opts.SerialTimeout
-		}
-		if timeout <= 0 {
-			timeout = defaultEmulatorSerialTimeout
-		}
-		if timeout != defaultEmulatorSerialTimeout {
-			args = append(args, "--serial-timeout", timeout.String())
-		}
-		out, err := m.runRemote(args...)
+		out, err := m.runRemote("run", "--name", opts.Name)
 		recordSpanError(span, err)
 		if err != nil {
 			return "", err
@@ -340,11 +324,7 @@ func (m *Manager) Run(opts RunOptions) (string, error) {
 		recordSpanError(span, err)
 		return "", err
 	}
-	env := m.withContext(ctx)
-	if opts.SerialTimeout > 0 {
-		env.EmulatorSerialTimeout = opts.SerialTimeout
-	}
-	serial, err := avd.RunAVD(env, opts.Name)
+	serial, err := avd.RunAVD(m.withContext(ctx), opts.Name)
 	recordSpanError(span, err)
 	if err == nil {
 		span.SetAttributes(attribute.String("serial", serial))
@@ -387,18 +367,7 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 		}
 	}
 	if m.usesRemote() {
-		args := []string{"run", "--name", opts.Name, "--port", strconv.Itoa(port)}
-		timeout := m.env.EmulatorSerialTimeout
-		if opts.SerialTimeout > 0 {
-			timeout = opts.SerialTimeout
-		}
-		if timeout <= 0 {
-			timeout = defaultEmulatorSerialTimeout
-		}
-		if timeout != defaultEmulatorSerialTimeout {
-			args = append(args, "--serial-timeout", timeout.String())
-		}
-		out, runErr := m.runRemote(args...)
+		out, runErr := m.runRemote("run", "--name", opts.Name, "--port", strconv.Itoa(port))
 		recordSpanError(span, runErr)
 		if runErr != nil {
 			return "", "", runErr
@@ -412,11 +381,7 @@ func (m *Manager) RunOnPort(opts RunOptions) (serial string, logPath string, err
 		return serial, logPath, nil
 	}
 
-	env := m.withContext(ctx)
-	if opts.SerialTimeout > 0 {
-		env.EmulatorSerialTimeout = opts.SerialTimeout
-	}
-	serial, logPath, err = avd.RunAVDOnPort(env, opts.Name, port)
+	_, serial, logPath, err = avd.StartEmulatorOnPort(m.withContext(ctx), opts.Name, port)
 	recordSpanError(span, err)
 	if err == nil {
 		span.SetAttributes(attribute.String("serial", serial))

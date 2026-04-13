@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	core "github.com/forkbombeu/avdctl/internal/avd"
 	ioscore "github.com/forkbombeu/avdctl/internal/ios"
@@ -253,7 +252,7 @@ func TestPlatformRunWithoutPlatformPrefersAndroidOnNameCollision(t *testing.T) {
 	androidListFn = func(core.Env) ([]core.Info, error) {
 		return []core.Info{{Name: "shared"}}, nil
 	}
-	androidRunAVDFn = func(core.Env, string, time.Duration) (string, error) {
+	androidRunAVDFn = func(core.Env, string) (string, error) {
 		return "emulator-5580", nil
 	}
 	iosEnsureSupportedFn = func() error { return nil }

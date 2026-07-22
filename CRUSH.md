@@ -4,7 +4,7 @@
 
 **avdctl** is a Linux-focused CLI tool for managing Android Virtual Device (AVD) lifecycle with a golden-image/clone workflow. It enables fast creation of disposable emulator instances backed by QCOW2 golden images, designed for CI environments and parallel execution.
 
-- **Language**: Go 1.25.3
+- **Language**: Go 1.26.5
 - **CLI Framework**: cobra (github.com/spf13/cobra)
 - **License**: AGPL-3.0-only
 - **Copyright**: Forkbomb B.V. 2025
@@ -94,13 +94,13 @@ task fresh                  # clean → init-base → prewarm → clone-acme →
 
 Set these in your shell or Taskfile (see `Taskfile.yml` for defaults):
 
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `ANDROID_SDK_ROOT` | `/opt/android-sdk` | Android SDK path |
-| `ANDROID_AVD_HOME` | `~/.android/avd` | AVD storage directory |
-| `AVDCTL_GOLDEN_DIR` | `~/avd-golden` | Golden QCOW2 images |
-| `AVDCTL_CLONES_DIR` | `~/avd-clones` | (Reserved for future use) |
-| `AVDCTL_CONFIG_TEMPLATE` | (optional) | Path to custom `config.ini.tpl` |
+| Variable                 | Default            | Purpose                         |
+| ------------------------ | ------------------ | ------------------------------- |
+| `ANDROID_SDK_ROOT`       | `/opt/android-sdk` | Android SDK path                |
+| `ANDROID_AVD_HOME`       | `~/.android/avd`   | AVD storage directory           |
+| `AVDCTL_GOLDEN_DIR`      | `~/avd-golden`     | Golden QCOW2 images             |
+| `AVDCTL_CLONES_DIR`      | `~/avd-clones`     | (Reserved for future use)       |
+| `AVDCTL_CONFIG_TEMPLATE` | (optional)         | Path to custom `config.ini.tpl` |
 
 **Detection logic**: `internal/avd/env.go:25-52`
 
@@ -148,19 +148,19 @@ Set these in your shell or Taskfile (see `Taskfile.yml` for defaults):
 
 **Commands** (see `--help` for full flags):
 
-| Command | Purpose |
-|---------|---------|
-| `init-base` | Create base AVD (installs system image if needed) |
-| `save-golden` | Export userdata to compressed QCOW2 |
-| `prewarm` | Boot once, settle caches, export golden (no snapshots) |
-| `clone` | Create symlinked clone backed by golden QCOW2 |
-| `run` | Run AVD headless (supports `--port` for parallel instances) |
-| `bake-apk` | Clone → boot → install APKs → export new golden |
-| `list` | List AVDs (supports `--json`) |
-| `ps` | List running emulators (supports `--json`) |
-| `status` | Show status for running emulator by `--name` or `--serial` |
-| `stop` | Stop emulator by `--name` or `--serial` |
-| `delete` | Delete AVD and .ini file |
+| Command       | Purpose                                                     |
+| ------------- | ----------------------------------------------------------- |
+| `init-base`   | Create base AVD (installs system image if needed)           |
+| `save-golden` | Export userdata to compressed QCOW2                         |
+| `prewarm`     | Boot once, settle caches, export golden (no snapshots)      |
+| `clone`       | Create symlinked clone backed by golden QCOW2               |
+| `run`         | Run AVD headless (supports `--port` for parallel instances) |
+| `bake-apk`    | Clone → boot → install APKs → export new golden             |
+| `list`        | List AVDs (supports `--json`)                               |
+| `ps`          | List running emulators (supports `--json`)                  |
+| `status`      | Show status for running emulator by `--name` or `--serial`  |
+| `stop`        | Stop emulator by `--name` or `--serial`                     |
+| `delete`      | Delete AVD and .ini file                                    |
 
 ## Naming Conventions
 
@@ -182,7 +182,7 @@ Set these in your shell or Taskfile (see `Taskfile.yml` for defaults):
 
 - **AVD directories**: `$ANDROID_AVD_HOME/<name>.avd/`
 - **AVD metadata**: `$ANDROID_AVD_HOME/<name>.ini`
-- **Userdata files**: 
+- **Userdata files**:
   - QCOW2: `userdata-qemu.img.qcow2`
   - Raw: `userdata.img` (fallback for base AVDs)
 - **Golden images**: `$AVDCTL_GOLDEN_DIR/<name>-prewarmed.qcow2` or `<name>-baked.qcow2`
@@ -229,6 +229,7 @@ Emulators use a port pair: `<port>` (console) and `<port+1>` (ADB). Always speci
 All operations force cold boot (`-no-snapshot-load`, `-no-snapshot-save`). Golden images rely on QCOW2 overlays, not emulator snapshots. Emulators also run with `-read-only` to allow multiple instances sharing base AVD files.
 
 **Related code**:
+
 - `internal/avd/ops.go:225-242` (`sanitizeConfigINI`)
 - `internal/avd/ops.go:257-270` (`StartEmulator` args with `-read-only`)
 - `internal/avd/ops.go:423-432` (`StartEmulatorOnPort` args with `-read-only`)
@@ -236,6 +237,7 @@ All operations force cold boot (`-no-snapshot-load`, `-no-snapshot-save`). Golde
 ### 3. Config Sanitization
 
 When cloning, `config.ini` is sanitized to remove snapshot/quickboot settings and enforce:
+
 - `QuickBoot.mode=disabled`
 - `snapshot.present=false`
 - `fastboot.forceColdBoot=yes`
@@ -269,6 +271,7 @@ Clones are created by copying full raw IMG files from golden directory (~40s for
 **Method**: Uses `io.Copy` for streaming (doesn't load entire file into memory), config sets `userdata.useQcow2=no`
 
 **Trade-offs**:
+
 - Clone time: ~40s for 6GB golden (proportional to size)
 - Disk usage: Full copy per clone (6GB+ each)
 - Isolation: Complete (each clone fully independent)
@@ -296,14 +299,16 @@ Emulators set `QEMU_FILE_LOCKING=off` environment variable to allow multiple ins
 
 ## Docker Support
 
-**dockerfile** is present (Go 1.25, Debian Bookworm base). No Compose or orchestration. Expects Android SDK tools to be bind-mounted or available in PATH at runtime.
+**dockerfile** is present (Go 1.26, Debian Bookworm base). No Compose or orchestration. Expects Android SDK tools to be bind-mounted or available in PATH at runtime.
 
 **Build**:
+
 ```bash
 docker build -t avdctl .
 ```
 
 **Usage** (requires SDK + KVM access):
+
 ```bash
 docker run --rm -v $ANDROID_SDK_ROOT:/opt/android-sdk -v ~/.android:/root/.android avdctl list
 ```
@@ -328,6 +333,7 @@ docker run --rm -v $ANDROID_SDK_ROOT:/opt/android-sdk -v ~/.android:/root/.andro
 ### Modifying Config Template
 
 Edit `config.ini.tpl` carefully. Key settings enforced by `sanitizeConfigINI`:
+
 - `QuickBoot.mode=disabled`
 - `snapshot.present=false`
 - `fastboot.forceColdBoot=yes`
@@ -378,29 +384,29 @@ Override via environment or `task <target> VAR=value`.
 
 ## Common Tasks Reference
 
-| Task | Description |
-|------|-------------|
-| `build` | Build binary to `bin/avdctl` |
-| `test` | Run `go test ./...` |
-| `env` | Show environment variables |
-| `a` | Run `./bin/avdctl {{.CLI_ARGS}}` |
-| `mkdirs` | Create `$AVDCTL_GOLDEN_DIR` and `$AVDCTL_CLONES_DIR` |
-| `init-base` | Create base AVD (deps: build, mkdirs) |
-| `prewarm` | Prewarm base AVD (deps: build, mkdirs) |
-| `clone-acme` | Clone base to `w-acme` (deps: build) |
-| `clone-gino` | Clone base to `w-gino` (deps: build) |
-| `run-acme` | Run `w-acme` on port 5580 (deps: build) |
-| `run-gino` | Run `w-gino` on port 5582 (deps: build) |
-| `ps` | List running emulators |
-| `stop` | Stop emulator (default: `w-acme`, override with `NAME=...`) |
-| `clean-avds` | Kill adb server, delete all AVDs in `$ANDROID_AVD_HOME` |
-| `fresh` | Full from-scratch flow (clean → init → prewarm → clone) |
+| Task         | Description                                                 |
+| ------------ | ----------------------------------------------------------- |
+| `build`      | Build binary to `bin/avdctl`                                |
+| `test`       | Run `go test ./...`                                         |
+| `env`        | Show environment variables                                  |
+| `a`          | Run `./bin/avdctl {{.CLI_ARGS}}`                            |
+| `mkdirs`     | Create `$AVDCTL_GOLDEN_DIR` and `$AVDCTL_CLONES_DIR`        |
+| `init-base`  | Create base AVD (deps: build, mkdirs)                       |
+| `prewarm`    | Prewarm base AVD (deps: build, mkdirs)                      |
+| `clone-acme` | Clone base to `w-acme` (deps: build)                        |
+| `clone-gino` | Clone base to `w-gino` (deps: build)                        |
+| `run-acme`   | Run `w-acme` on port 5580 (deps: build)                     |
+| `run-gino`   | Run `w-gino` on port 5582 (deps: build)                     |
+| `ps`         | List running emulators                                      |
+| `stop`       | Stop emulator (default: `w-acme`, override with `NAME=...`) |
+| `clean-avds` | Kill adb server, delete all AVDs in `$ANDROID_AVD_HOME`     |
+| `fresh`      | Full from-scratch flow (clean → init → prewarm → clone)     |
 
 ## Diagnostics
 
 Current LSP hints (non-blocking, modernization suggestions):
 
-- `ops.go:265,440,501`: Use `strings.SplitSeq` for efficiency (Go 1.25+ feature)
+- `ops.go:265,440,501`: Use `strings.SplitSeq` for efficiency (Go 1.26+ feature)
 - `ops.go:540`: Replace `[]byte(fmt.Sprintf(...))` with `fmt.Appendf`
 
 No errors or warnings.
@@ -415,6 +421,7 @@ All code must include header:
 ```
 
 Present in:
+
 - `cmd/avdctl/main.go:1-2`
 - `internal/avd/env.go:1-2`
 - `internal/avd/ops.go:1-2`
@@ -424,20 +431,23 @@ Present in:
 ## Quick Start for New Developers
 
 1. **Install prerequisites**:
+
    ```bash
    # Android SDK (if not present)
    # Install to /opt/android-sdk or set $ANDROID_SDK_ROOT
-   
+
    # Install qemu-img
    sudo apt install qemu-utils  # Debian/Ubuntu
    ```
 
 2. **Build**:
+
    ```bash
    task build
    ```
 
 3. **Set environment** (optional, Taskfile has defaults):
+
    ```bash
    export ANDROID_SDK_ROOT=/opt/android-sdk
    export ANDROID_AVD_HOME=$HOME/.android/avd
@@ -445,6 +455,7 @@ Present in:
    ```
 
 4. **Run full workflow**:
+
    ```bash
    task fresh    # Creates base-a35, prewarmed golden, two clones
    task run-acme # Start emulator

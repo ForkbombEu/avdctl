@@ -41,15 +41,16 @@ COPY --from=avdctl-bin /usr/local/bin/avdctl /usr/local/bin/avdctl
    - `sdkmanager`
 
 2. **QEMU utilities**:
+
    ```bash
    # Debian/Ubuntu
    sudo apt install qemu-utils
-   
+
    # macOS
    brew install qemu
    ```
 
-3. **Go 1.25+** (for building from source)
+3. **Go 1.26+** (for building from source)
 
 4. **Xcode command line tools / `xcrun simctl`** (required for iOS commands on macOS)
 
@@ -282,6 +283,7 @@ Each customer gets a lightweight clone backed by the golden image:
 ```
 
 **Port notes:**
+
 - Must be **even** numbers (emulator uses port + port+1)
 - Each instance needs a unique port pair
 - Default range: 5554-5586 (adb auto-discovery range)
@@ -512,6 +514,7 @@ ls -lh ~/.android/avd/w-customer1.avd/userdata-qemu.img.qcow2
 - **Parallel Safe**: Uses `QEMU_FILE_LOCKING=off` and `-read-only` for shared backing files
 
 **Disk Usage:**
+
 - Base AVD: ~8GB (system image + initial userdata)
 - Golden QCOW2: ~500MB-2GB (compressed, depends on configuration)
 - Clone overlay: ~196KB initially, grows with changes (typically <100MB)

@@ -1,7 +1,7 @@
 # Copyright (C) 2025 Forkbomb B.V.
 # License: AGPL-3.0-only
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY . .
 RUN go build -o /out/avdctl ./cmd/avdctl

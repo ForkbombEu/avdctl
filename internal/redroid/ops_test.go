@@ -118,6 +118,9 @@ elif [ "${1:-}" = "-S" ]; then
     shift
   fi
 fi
+if [ "${1:-}" = "sysctl" ]; then
+  exit 0
+fi
 exec "$@"
 `)
 	tar := writeExecScript(t, tmp, "tar", `
@@ -154,6 +157,9 @@ exit 0
 		t.Fatalf("read sudo log: %v", err)
 	}
 	got := string(sudoCmd)
+	if !strings.Contains(got, "-n sysctl -q -w vm.watermark_scale_factor=10") {
+		t.Fatalf("missing sudo sysctl call: %s", got)
+	}
 	if !strings.Contains(got, "-n mkdir -p "+filepath.Dir(dataDir)) {
 		t.Fatalf("missing sudo mkdir call: %s", got)
 	}
@@ -192,6 +198,9 @@ shift
 if [ "${1:-}" = "-p" ]; then
   shift
   shift
+fi
+if [ "${1:-}" = "sysctl" ]; then
+  exit 0
 fi
 exec "$@"
 `)

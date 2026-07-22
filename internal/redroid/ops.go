@@ -209,6 +209,10 @@ func (m *manager) Start(opts StartOptions) (string, error) {
 	dataParent := filepath.Dir(opts.DataDir)
 	run := m.run
 	if useSudo {
+		if err := m.runSudo("sysctl", "-q", "-w", "vm.watermark_scale_factor=10"); err != nil {
+			recordSpanError(span, err)
+			return "", err
+		}
 		run = m.runSudo
 	}
 	if err := run("mkdir", "-p", dataParent); err != nil {

@@ -1510,10 +1510,9 @@ func createSDCard(env Env, avdDir, configPath string) error {
 		sdcardSize = "512M"
 	}
 
-	// Normalize size format: remove spaces, ensure minimum 9M
+	// Normalize size format: qemu-img accepts M/G suffixes, not MB/GB.
 	// "512 MB" -> "512M", "1 GB" -> "1G"
-	sdcardSize = strings.ReplaceAll(sdcardSize, " ", "")
-	sdcardSize = strings.ToUpper(sdcardSize)
+	sdcardSize = normalizeSDCardSize(sdcardSize)
 
 	// Ensure minimum 512M (mksdcard requires at least 9M)
 	if !strings.Contains(sdcardSize, "M") && !strings.Contains(sdcardSize, "G") {
@@ -1534,6 +1533,15 @@ func createSDCard(env Env, avdDir, configPath string) error {
 
 	// Fallback: create empty file with qemu-img
 	return run(env, env.QemuImg, "create", "-f", "raw", sdcardPath, sdcardSize)
+}
+
+func normalizeSDCardSize(size string) string {
+	size = strings.ToUpper(strings.ReplaceAll(size, " ", ""))
+	size = strings.TrimSuffix(size, "IB")
+	if strings.HasSuffix(size, "MB") || strings.HasSuffix(size, "GB") {
+		size = strings.TrimSuffix(size, "B")
+	}
+	return size
 }
 
 // CustomizeStart prepares AVD for manual customization and starts GUI emulator without snapshots.

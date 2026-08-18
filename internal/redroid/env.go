@@ -17,8 +17,9 @@ type Env struct {
 	SudoPass      string
 	CorrelationID string
 
-	SSHTarget string
-	SSHArgs   []string
+	SSHTarget   string
+	SSHArgs     []string
+	SSHPassword string
 
 	Context context.Context
 }
@@ -34,6 +35,7 @@ func Detect() Env {
 		CorrelationID: strings.TrimSpace(os.Getenv("AVDCTL_CORRELATION_ID")),
 		SSHTarget:     os.Getenv("AVDCTL_SSH_TARGET"),
 		SSHArgs:       strings.Fields(os.Getenv("AVDCTL_SSH_ARGS")),
+		SSHPassword:   os.Getenv("AVDCTL_SSH_PASSWORD"),
 		Context:       context.Background(),
 	}
 }

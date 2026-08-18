@@ -176,6 +176,33 @@ func dial(ctx context.Context, target string, sshArgs []string, password string)
 	}
 
 	address := net.JoinHostPort(host, strconv.Itoa(port))
+	client, err := dialClient(ctx, address, config)
+	if err == nil {
+		return client, nil
+	}
+
+	var keyErr *knownhosts.KeyError
+	if !errors.As(err, &keyErr) || len(keyErr.Want) == 0 {
+		return nil, err
+	}
+
+	algorithms := knownHostKeyAlgorithms(keyErr.Want)
+	if len(algorithms) == 0 {
+		return nil, err
+	}
+	for _, algorithm := range algorithms {
+		retryConfig := *config
+		retryConfig.HostKeyAlgorithms = []string{algorithm}
+		client, retryErr := dialClient(ctx, address, &retryConfig)
+		if retryErr == nil {
+			return client, nil
+		}
+		err = retryErr
+	}
+	return nil, err
+}
+
+func dialClient(ctx context.Context, address string, config *ssh.ClientConfig) (*ssh.Client, error) {
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
@@ -188,6 +215,28 @@ func dial(ctx context.Context, target string, sshArgs []string, password string)
 		return nil, fmt.Errorf("ssh handshake %s: %w", address, err)
 	}
 	return ssh.NewClient(cConn, chans, reqs), nil
+}
+
+// knownHostKeyAlgorithms limits a retry to algorithms already trusted for the
+// destination. This lets a host with multiple key types use a known key even
+// when Go's default negotiation selects an unlisted key type first.
+func knownHostKeyAlgorithms(keys []knownhosts.KnownKey) []string {
+	algorithms := make([]string, 0, len(keys))
+	seen := make(map[string]struct{})
+	for _, knownKey := range keys {
+		keyAlgorithms := []string{knownKey.Key.Type()}
+		if knownKey.Key.Type() == ssh.KeyAlgoRSA {
+			keyAlgorithms = []string{ssh.KeyAlgoRSASHA512, ssh.KeyAlgoRSASHA256, ssh.KeyAlgoRSA}
+		}
+		for _, algorithm := range keyAlgorithms {
+			if _, ok := seen[algorithm]; ok {
+				continue
+			}
+			seen[algorithm] = struct{}{}
+			algorithms = append(algorithms, algorithm)
+		}
+	}
+	return algorithms
 }
 
 func runSession(ctx context.Context, client *ssh.Client, session *ssh.Session, command string) error {

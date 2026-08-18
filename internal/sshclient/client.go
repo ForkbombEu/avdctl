@@ -41,7 +41,21 @@ func Run(
 	stderr io.Writer,
 	tty bool,
 ) error {
-	client, err := dial(ctx, target, sshArgs)
+	return run(ctx, target, sshArgs, "", command, stdin, stdout, stderr, tty)
+}
+
+func run(
+	ctx context.Context,
+	target string,
+	sshArgs []string,
+	password string,
+	command string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+	tty bool,
+) error {
+	client, err := dial(ctx, target, sshArgs, password)
 	if err != nil {
 		return err
 	}
@@ -80,7 +94,24 @@ func RunArgs(
 	stderr io.Writer,
 	tty bool,
 ) error {
-	return Run(ctx, target, sshArgs, shellWrap(shellJoin(argv)), stdin, stdout, stderr, tty)
+	return RunArgsWithPassword(ctx, target, sshArgs, "", argv, stdin, stdout, stderr, tty)
+}
+
+// RunArgsWithPassword executes argv with an explicit SSH password. The
+// password belongs to this connection only and is never written to process
+// environment.
+func RunArgsWithPassword(
+	ctx context.Context,
+	target string,
+	sshArgs []string,
+	password string,
+	argv []string,
+	stdin io.Reader,
+	stdout io.Writer,
+	stderr io.Writer,
+	tty bool,
+) error {
+	return run(ctx, target, sshArgs, password, shellWrap(shellJoin(argv)), stdin, stdout, stderr, tty)
 }
 
 func shellJoin(args []string) string {
@@ -95,7 +126,7 @@ func shellWrap(command string) string {
 	return "sh -lc " + shellQuote(command)
 }
 
-func dial(ctx context.Context, target string, sshArgs []string) (*ssh.Client, error) {
+func dial(ctx context.Context, target string, sshArgs []string, password string) (*ssh.Client, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		return nil, errors.New("empty ssh target")
@@ -124,7 +155,7 @@ func dial(ctx context.Context, target string, sshArgs []string) (*ssh.Client, er
 		port = parsed.Port
 	}
 
-	auth, err := authMethods(parsed.IdentityFiles)
+	auth, err := authMethods(parsed.IdentityFiles, password)
 	if err != nil {
 		return nil, err
 	}
@@ -288,10 +319,12 @@ func applyOpenSSHOption(out *parsedArgs, opt string) {
 	}
 }
 
-func authMethods(identityFiles []string) ([]ssh.AuthMethod, error) {
+func authMethods(identityFiles []string, password string) ([]ssh.AuthMethod, error) {
 	var methods []ssh.AuthMethod
 
-	if pass := os.Getenv("AVDCTL_SSH_PASSWORD"); pass != "" {
+	if pass := strings.TrimSpace(password); pass != "" {
+		methods = append(methods, ssh.Password(pass))
+	} else if pass := os.Getenv("AVDCTL_SSH_PASSWORD"); pass != "" {
 		methods = append(methods, ssh.Password(pass))
 	}
 

@@ -25,8 +25,9 @@ type Environment struct {
 	Sudo       bool
 	SudoPass   string
 
-	SSHTarget string
-	SSHArgs   []string
+	SSHTarget   string
+	SSHArgs     []string
+	SSHPassword string
 
 	CorrelationID string
 	Context       context.Context
@@ -75,6 +76,7 @@ func NewWithEnv(env Environment) *Manager {
 			CorrelationID: env.CorrelationID,
 			SSHTarget:     env.SSHTarget,
 			SSHArgs:       env.SSHArgs,
+			SSHPassword:   env.SSHPassword,
 			Context:       ctx,
 		},
 	}

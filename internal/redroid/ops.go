@@ -451,7 +451,11 @@ func (m *manager) runOutputWithInput(stdin io.Reader, bin string, args ...string
 }
 
 func (m *manager) runRemote(args ...string) (string, error) {
-	out, errOut, err := remoteavdctl.RunOutput(m.context(), m.env.SSHTarget, m.env.SSHArgs, args)
+	remoteEnvironment := []string(nil)
+	if m.env.SudoPass != "" {
+		remoteEnvironment = []string{"AVDCTL_SUDO_PASSWORD=" + m.env.SudoPass}
+	}
+	out, errOut, err := remoteavdctl.RunOutputWithEnvironment(m.context(), m.env.SSHTarget, m.env.SSHArgs, m.env.SSHPassword, remoteEnvironment, args)
 	if err != nil {
 		return "", fmt.Errorf("remote avdctl %v failed: %w\n%s", args, err, strings.TrimSpace(errOut))
 	}

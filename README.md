@@ -50,7 +50,7 @@ COPY --from=avdctl-bin /usr/local/bin/avdctl /usr/local/bin/avdctl
    brew install qemu
    ```
 
-3. **Go 1.26+** (for building from source)
+3. **Go 1.27.3+** (for building from source)
 
 4. **Xcode command line tools / `xcrun simctl`** (required for iOS commands on macOS)
 

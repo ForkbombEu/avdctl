@@ -4,7 +4,7 @@
 
 **avdctl** is a Linux-focused CLI tool for managing Android Virtual Device (AVD) lifecycle with a golden-image/clone workflow. It enables fast creation of disposable emulator instances backed by QCOW2 golden images, designed for CI environments and parallel execution.
 
-- **Language**: Go 1.26.5
+- **Language**: Go 1.27.3
 - **CLI Framework**: cobra (github.com/spf13/cobra)
 - **License**: AGPL-3.0-only
 - **Copyright**: Forkbomb B.V. 2025
@@ -299,7 +299,7 @@ Emulators set `QEMU_FILE_LOCKING=off` environment variable to allow multiple ins
 
 ## Docker Support
 
-**dockerfile** is present (Go 1.26, Debian Bookworm base). No Compose or orchestration. Expects Android SDK tools to be bind-mounted or available in PATH at runtime.
+**dockerfile** is present (Go 1.27.3, Debian Bookworm base). No Compose or orchestration. Expects Android SDK tools to be bind-mounted or available in PATH at runtime.
 
 **Build**:
 

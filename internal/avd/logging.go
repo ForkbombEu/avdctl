@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	otellog "go.opentelemetry.io/otel/log"
-	logglobal "go.opentelemetry.io/otel/log/global"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -45,22 +46,22 @@ func emitOTelLog(env Env, message string, fields ...any) {
 	record.SetObservedTimestamp(now)
 	record.SetSeverity(otellog.SeverityInfo)
 	record.SetSeverityText("info")
-	record.SetBody(otellog.StringValue(message))
+	record.SetBody(attribute.StringValue(message))
 	record.AddAttributes(logFields(fields)...)
-	logglobal.Logger("avdctl").Emit(ctx, record)
+	otel.GetLoggerProvider().Logger("avdctl").Emit(ctx, record)
 }
 
-func logFields(fields []any) []otellog.KeyValue {
+func logFields(fields []any) []attribute.KeyValue {
 	if len(fields) == 0 {
 		return nil
 	}
-	attrs := make([]otellog.KeyValue, 0, len(fields)/2)
+	attrs := make([]attribute.KeyValue, 0, len(fields)/2)
 	for i := 0; i+1 < len(fields); i += 2 {
 		key, ok := fields[i].(string)
 		if !ok || strings.TrimSpace(key) == "" {
 			continue
 		}
-		attrs = append(attrs, otellog.String(key, toLogValue(fields[i+1])))
+		attrs = append(attrs, attribute.String(key, toLogValue(fields[i+1])))
 	}
 	return attrs
 }
